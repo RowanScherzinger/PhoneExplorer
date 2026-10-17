@@ -5,32 +5,31 @@ namespace PhoneExplorer.Hud;
 /// <summary>How a ToolStrip item is drawn. Set with HudRenderer.Style().</summary>
 public enum ItemRole { Ghost, Toggle, Segment, Primary, Secondary, Danger, Label, Text }
 
-/// <summary>Renders toolbars, the status bar and context menus in the HUD style (docs/04-components.md).</summary>
+/// <summary>Renders toolbars, the status bar and context menus in the current theme (docs/04-components.md).</summary>
 public sealed class HudRenderer : ToolStripProfessionalRenderer
 {
     public HudRenderer() : base(new HudColors()) { RoundedEdges = false; }
 
     static readonly Dictionary<ToolStripItem, ItemRole> roles = new();
+    /// <summary>Popup windows already given the current theme's corners.</summary>
+    static readonly Dictionary<IntPtr, ThemeDef> popups = new();
 
-    static float Scale(ToolStripItem item) => (item.Owner?.DeviceDpi ?? 96) / 96f;
-
-    /// <summary>Applies a role: font, uppercase text and padding for the letter-spacing the renderer adds.</summary>
+    /// <summary>Applies a role: font, and padding for the letter-spacing and case the renderer adds.</summary>
     public static T Style<T>(T item, ItemRole role) where T : ToolStripItem
     {
         roles[item] = role;
-        item.Text = role is ItemRole.Text ? item.Text : item.Text?.ToUpperInvariant();
         item.Font = role switch
         {
             ItemRole.Label => Theme.Label(),
-            ItemRole.Text => Theme.Mono(Theme.TextSm),
-            _ => Theme.Font(Theme.FontDisplayBold, Theme.TextXs),
+            ItemRole.Text => Theme.Body(Theme.TextSm),
+            _ => Theme.ButtonFont(),
         };
         if (role is not ItemRole.Text)
         {
-            // Native layout measures untracked text; add the tracking width as padding.
-            var tracked = Theme.MeasureTracked(null, item.Text ?? "", item.Font, Tracking(role)).Width;
+            // Native layout measures the plain text; add the drawn (cased, tracked) width as padding.
+            var tracked = Theme.MeasureTracked(null, Theme.Case(item.Text ?? ""), item.Font, Tracking(role)).Width;
             var plain = TextRenderer.MeasureText(item.Text ?? "", item.Font, Size.Empty, TextFormatFlags.NoPadding).Width;
-            int pad = role is ItemRole.Label ? 2 : Theme.Space3;
+            int pad = role is ItemRole.Label ? 2 : Theme.Current.Pills ? Theme.Space4 : Theme.Space3;
             int extra = Math.Max(0, tracked - plain);
             item.Padding = new Padding(pad + extra / 2, 0, pad + extra - extra / 2, 0);
         }
@@ -42,6 +41,17 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
         return item;
     }
 
+    /// <summary>Re-applies every styled item's role after a theme change (fonts and padding depend on it).</summary>
+    public static void Restyle(ToolStrip strip)
+    {
+        foreach (ToolStripItem item in strip.Items)
+        {
+            if (roles.TryGetValue(item, out var role)) Style(item, role);
+            if (item is ToolStripDropDownItem { HasDropDownItems: true } d) Restyle(d.DropDown);
+        }
+        strip.Invalidate();
+    }
+
     static float Tracking(ItemRole role) => role == ItemRole.Label ? Theme.TrackingLabel : Theme.TrackingWide;
 
     static ItemRole RoleOf(ToolStripItem item) =>
@@ -49,6 +59,12 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
     {
+        if (e.ToolStrip is ToolStripDropDown && e.ToolStrip.IsHandleCreated &&
+            (!popups.TryGetValue(e.ToolStrip.Handle, out var applied) || applied != Theme.Current))
+        {
+            HudWindow.Popup(e.ToolStrip.Handle);
+            popups[e.ToolStrip.Handle] = Theme.Current;
+        }
         var bg = e.ToolStrip is ToolStripDropDown ? Theme.SolidSurfaceRaised : Theme.ColorBgElevated;
         using var b = new SolidBrush(bg);
         e.Graphics.FillRectangle(b, e.AffectedBounds);
@@ -59,6 +75,8 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
         var r = e.ToolStrip.ClientRectangle;
         if (e.ToolStrip is ToolStripDropDown)
         {
+            // Round themes: Windows draws the rounded border (HudWindow.Popup).
+            if (HudWindow.RoundPopups) return;
             using var p = new Pen(Theme.SolidBorderStrong);
             e.Graphics.DrawRectangle(p, 0, 0, r.Width - 1, r.Height - 1);
             Theme.DrawBrackets(e.Graphics, r, Theme.ColorAccent, Theme.BracketSize * e.ToolStrip.DeviceDpi / 96, Theme.LineThin);
@@ -86,19 +104,44 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
     {
         if (!e.Item.Selected || !e.Item.Enabled) return;
         var r = new Rectangle(Point.Empty, e.Item.Size);
-        r.Inflate(-2, 0);
         bool danger = RoleOf(e.Item) == ItemRole.Danger;
+        if (!Theme.Hud)
+        {
+            // Soft: a rounded row highlight, no edge bar.
+            r.Inflate(-Theme.Space1, 0);
+            Theme.Fill(e.Graphics, danger ? Theme.ColorDangerFill : Theme.ColorAccentSoft, r, Theme.Corner.Sm);
+            return;
+        }
+        r.Inflate(-2, 0);
         using var fill = new SolidBrush(danger ? Theme.ColorDangerFill : Theme.ColorAccentSoft);
         e.Graphics.FillRectangle(fill, r);
         using var bar = new SolidBrush(danger ? Theme.ColorStatusDanger : Theme.ColorAccent);
         e.Graphics.FillRectangle(bar, r.X, r.Y, 2, r.Height);
     }
 
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+    {
+        // A drawn tick in the selection colour (the default is a blue box).
+        var r = e.ImageRectangle;
+        int s = Math.Min(r.Width, r.Height) * 2 / 3;
+        float x = r.X + (r.Width - s) / 2f, y = r.Y + (r.Height - s) / 2f;
+        var old = e.Graphics.SmoothingMode;
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        bool round = Theme.Current.RadiusSm > 0;
+        using var pen = new Pen(Theme.ColorSelect, Theme.LineThin * (e.Item.Owner?.DeviceDpi ?? 96) / 96f)
+        {
+            LineJoin = round ? LineJoin.Round : LineJoin.Miter,
+            StartCap = round ? LineCap.Round : LineCap.Square,
+            EndCap = round ? LineCap.Round : LineCap.Square,
+        };
+        e.Graphics.DrawLines(pen, new[] { new PointF(x + s * 0.1f, y + s * 0.55f), new PointF(x + s * 0.4f, y + s * 0.85f), new PointF(x + s * 0.95f, y + s * 0.2f) });
+        e.Graphics.SmoothingMode = old;
+    }
+
     static void PaintBackground(Graphics g, ToolStripItem item)
     {
         var role = RoleOf(item);
         var r = new Rectangle(Point.Empty, item.Size);
-        r.Width -= 1; r.Height -= 1;
         bool on = item is ToolStripButton { Checked: true };
         bool hot = item.Selected && item.Enabled, down = item.Pressed;
         float a = item.Enabled ? 1 : Theme.DisabledOpacity;
@@ -127,13 +170,13 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
                 border = hot ? Theme.ColorStatusDanger : Theme.ColorDangerBorder;
                 break;
         }
-        if (fill is { } f) { using var b = new SolidBrush(Theme.Alpha(f, a)); g.FillRectangle(b, r); }
-        if (border is { } c) { using var p = new Pen(Theme.Alpha(c, a)); g.DrawRectangle(p, r); }
-        if (role is ItemRole.Primary && hot && item.Enabled)
+        if (fill is { } f) Theme.Fill(g, Theme.Alpha(f, a), r, Theme.Corner.Pill);
+        if (border is { } c) Theme.Stroke(g, Theme.Alpha(c, a), r, Theme.Corner.Pill);
+        if (role is ItemRole.Primary && hot && item.Enabled && Theme.Hud)
         {
             // --glow-sm on the primary action
             using var glow = new Pen(Theme.Alpha(Theme.ColorAccent, 0.35f), 2);
-            g.DrawRectangle(glow, Rectangle.Inflate(r, 1, 1));
+            g.DrawRectangle(glow, -1, -1, r.Width + 1, r.Height + 1);
         }
     }
 
@@ -150,6 +193,7 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
             ItemRole.Toggle or ItemRole.Segment => on ? Theme.ColorAccentHover : hot ? Theme.ColorAccent : Theme.ColorTextMuted,
             ItemRole.Ghost => hot ? Theme.ColorAccentHover : Theme.ColorTextMuted,
             ItemRole.Danger => Theme.ColorDangerText,
+            ItemRole.Label => Theme.ColorEyebrow,
             _ => Theme.ColorTextMuted,
         };
         if (!item.Enabled)
@@ -169,12 +213,13 @@ public sealed class HudRenderer : ToolStripProfessionalRenderer
             return;
         }
         var font = e.TextFont ?? item.Font;
-        var size = Theme.MeasureTracked(e.Graphics, e.Text ?? "", font, Tracking(role));
+        var text = Theme.Case(e.Text ?? "");
+        var size = Theme.MeasureTracked(e.Graphics, text, font, Tracking(role));
         var bounds = item.ContentRectangle;
         var origin = new Point(
             item.Owner is ToolStripDropDown ? e.TextRectangle.X : bounds.X + (bounds.Width - size.Width) / 2,
             bounds.Y + (bounds.Height - size.Height) / 2);
-        Theme.DrawTracked(e.Graphics, e.Text ?? "", font, color, origin, Tracking(role));
+        Theme.DrawTracked(e.Graphics, text, font, color, origin, Tracking(role));
     }
 
     protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)

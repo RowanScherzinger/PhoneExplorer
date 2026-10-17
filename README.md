@@ -23,6 +23,7 @@ The app checks for a new version each time it starts. When there is one, it asks
 - **COPY SELECTED** copies into `Year\MM Month` folders (optional) and skips files already copied. Ctrl+C copies the selection. Double-click opens a photo.
 - **MOVE TO PC** (Ctrl+X) is cut and paste: it copies each item with all its files, checks every copy on the PC, and only then deletes it from the phone. If any file of an item fails, that item stays on the phone.
 - **DELETE** (Del) removes items from the phone after a confirmation that shows how many are already in your copy folder. It can't be undone from the PC.
+- Two looks: **Jarvis** (copper and gold) and **Pastel Girl** (soft pinks and creams). Switch with the theme button at the bottom right; the choice is remembered.
 - Picks the phone up automatically when it is plugged in; F5 refreshes. With more than one phone plugged in, click the DEVICE panel to switch between them. All phones copy to the same folder.
 
 ## iPhone

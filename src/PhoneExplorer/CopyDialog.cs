@@ -13,8 +13,9 @@ public sealed class CopyDialog : Form
     readonly int count;
     readonly string size;
 
-    /// <summary>Height of the painted readout above the controls, in logical px.</summary>
-    const int ReadoutHeight = 96;
+    /// <summary>Height of the painted readout above the controls, in logical px (at least 96; more for bigger theme fonts).</summary>
+    static int ReadoutHeight => Math.Max(96, Theme.Space5 + Theme.Space4 + Theme.Space3 + Theme.Space4 +
+        TextRenderer.MeasureText("0", Theme.BigNumber(Theme.Text2xl), Size.Empty, TextFormatFlags.NoPadding).Height);
 
     /// <param name="apple">iPhone: offer the companion files (edits, Live Photo clips, edit data). Other phones have none.</param>
     /// <param name="move">Move mode (cut and paste): every file of each item goes, so the companion
@@ -33,7 +34,7 @@ public sealed class CopyDialog : Form
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         BackColor = Theme.SolidSurfaceRaised;
         ForeColor = Theme.ColorText;
-        Font = Theme.Mono(Theme.TextSm);
+        Font = Theme.Body(Theme.TextSm);
         Padding = new Padding(Theme.Space6);
 
         dest = new HudTextBox(BackColor) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 0) };
@@ -137,18 +138,18 @@ public sealed class CopyDialog : Form
         base.OnPaint(e);
         var g = e.Graphics;
         int x = LogicalToDeviceUnits(Theme.Space6), y = LogicalToDeviceUnits(Theme.Space5);
-        Theme.DrawTracked(g, $"FROM {Tag}".ToUpperInvariant(), Theme.Label(), Theme.ColorTextMuted, new Point(x, y), Theme.TrackingLabel);
+        Theme.DrawTracked(g, Theme.Case($"From {Tag}"), Theme.Label(), Theme.ColorEyebrow, new Point(x, y), Theme.TrackingLabel);
         y += LogicalToDeviceUnits(Theme.Space4);
-        var vf = Theme.Font(Theme.FontMonoLight, Theme.Text2xl);
+        var vf = Theme.BigNumber(Theme.Text2xl);
         var value = count.ToString("N0");
         var vs = TextRenderer.MeasureText(g, value, vf, Size.Empty, TextFormatFlags.NoPadding);
         TextRenderer.DrawText(g, value, vf, new Point(x, y), Theme.ColorHighlight, TextFormatFlags.NoPadding);
-        var unit = count == 1 ? "ITEM" : "ITEMS";
+        var unit = Theme.Case(count == 1 ? "item" : "items");
         var lf = Theme.Label(Theme.TextXs);
         var us = Theme.MeasureTracked(g, unit, lf, Theme.TrackingLabel);
         int ux = x + vs.Width + LogicalToDeviceUnits(Theme.Space1), uy = y + vs.Height - us.Height - LogicalToDeviceUnits(3);
         ux += Theme.DrawTracked(g, unit, lf, Theme.ColorTextMuted, new Point(ux, uy), Theme.TrackingLabel) + LogicalToDeviceUnits(Theme.Space4);
-        TextRenderer.DrawText(g, size, Theme.Mono(Theme.TextMd), new Point(ux, uy - LogicalToDeviceUnits(3)), Theme.ColorText, TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g, size, Theme.Number(Theme.TextMd), new Point(ux, uy - LogicalToDeviceUnits(3)), Theme.ColorText, TextFormatFlags.NoPadding);
         using var pen = new Pen(Theme.Over(Theme.ColorBorder, BackColor));
         int ly = y + vs.Height + LogicalToDeviceUnits(Theme.Space3);
         g.DrawLine(pen, x, ly, ClientSize.Width - x, ly);

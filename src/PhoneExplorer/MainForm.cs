@@ -14,7 +14,8 @@ public sealed class MainForm : Form
     const int ThumbCacheLimit = 1500;
     const int WM_DEVICECHANGE = 0x0219;
 
-    readonly Settings settings = Settings.Load();
+    // Loads first: the theme must be in place before any control below is created.
+    readonly Settings settings = LoadSettings();
     readonly PhoneWorker worker = new();
 
     readonly ToolStrip tools = new() { GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(Theme.Space3, Theme.Space1, Theme.Space3, Theme.Space1), Renderer = new HudRenderer() };
@@ -24,6 +25,7 @@ public sealed class MainForm : Form
     readonly ToolStripButton imagesButton = HudRenderer.Style(new ToolStripButton("Screenshots") { CheckOnClick = true, ToolTipText = "Screenshots, and PNG, WEBP and GIF files such as saved images" }, ItemRole.Toggle);
     readonly ToolStripButton otherButton = HudRenderer.Style(new ToolStripButton("Other") { CheckOnClick = true, ToolTipText = "Files that are not photos or videos, for example .DAT" }, ItemRole.Toggle);
     readonly HudTextBox searchBox = new(Theme.ColorBgElevated) { Width = 180 };
+    ToolStripControlHost searchHost = null!;
     readonly ToolStripButton[] sizeButtons =
     {
         HudRenderer.Style(new ToolStripButton("S") { ToolTipText = "Small thumbnails" }, ItemRole.Segment),
@@ -41,6 +43,8 @@ public sealed class MainForm : Form
     readonly SplitContainer split = new() { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, SplitterWidth = 5 };
     readonly ContextMenuStrip gridMenu = new() { Renderer = new HudRenderer() };
     readonly ContextMenuStrip deviceMenu = new() { Renderer = new HudRenderer() };
+    readonly ContextMenuStrip treeMenu = new() { Renderer = new HudRenderer() };
+    readonly Panel libraryLabel = new() { Dock = DockStyle.Top };
     readonly ToolTip treeTip = HudToolTip.Create();
 
     readonly StatusStrip status = new() { Renderer = new HudRenderer(), SizingGrip = false, Padding = new Padding(Theme.Space2, 0, Theme.Space2, 0) };
@@ -48,6 +52,7 @@ public sealed class MainForm : Form
     readonly HudProgressItem progress = new() { Visible = false };
     readonly ToolStripButton cancelButton = HudRenderer.Style(new ToolStripButton("Cancel") { Visible = false }, ItemRole.Ghost);
     readonly HudReadoutItem readout = new();
+    readonly ToolStripDropDownButton themeButton = HudRenderer.Style(new ToolStripDropDownButton("Theme") { ToolTipText = "Change how Phone Explorer looks" }, ItemRole.Ghost);
 
     readonly System.Windows.Forms.Timer deviceTimer = new() { Interval = 1500 };
 
@@ -76,26 +81,22 @@ public sealed class MainForm : Form
         MinimumSize = new Size(760, 480);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
-        BackColor = Theme.ColorBg;
-        ForeColor = Theme.ColorText;
-        Font = Theme.Mono(Theme.TextMd);
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
         BuildToolbar();
         BuildMenu();
         BuildSidebar();
+        BuildThemeMenu();
 
-        split.BackColor = Theme.ColorBg;
-        split.Panel1.BackColor = split.Panel2.BackColor = Theme.ColorBg;
         split.Paint += (_, e) =>
         {
-            // The splitter is a single copper hairline.
+            // The splitter is a single hairline.
             var r = split.SplitterRectangle;
             using var pen = new Pen(Theme.SolidBorder);
             e.Graphics.DrawLine(pen, r.X + r.Width / 2, r.Y, r.X + r.Width / 2, r.Bottom);
         };
         split.Panel2.Controls.Add(grid);
-        status.Items.AddRange(new ToolStripItem[] { statusLabel, progress, cancelButton, readout });
+        status.Items.AddRange(new ToolStripItem[] { statusLabel, progress, cancelButton, readout, themeButton });
         Controls.Add(split);
         Controls.Add(tools);
         Controls.Add(status);
@@ -122,7 +123,15 @@ public sealed class MainForm : Form
             CheckForUpdate();
         };
         FormClosing += OnClosing;
+        ApplyTheme();
         UpdateButtons();
+    }
+
+    static Settings LoadSettings()
+    {
+        var s = Settings.Load();
+        Theme.Use(s.ThemeName);
+        return s;
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -166,7 +175,7 @@ public sealed class MainForm : Form
 
         searchBox.Box.PlaceholderText = "file name";
         searchBox.Box.TextChanged += (_, _) => ApplyView(keepScroll: false);
-        var searchHost = new ToolStripControlHost(searchBox) { AutoSize = false, Width = searchBox.Width, Margin = new Padding(0, 3, Theme.Space2, 3) };
+        searchHost = new ToolStripControlHost(searchBox) { AutoSize = false, Width = searchBox.Width, Margin = new Padding(0, 3, Theme.Space2, 3) };
 
         refreshButton.Click += (_, _) => StartScan();
         copySelectedButton.Click += (_, _) => CopyEntries(grid.SelectedEntries);
@@ -186,16 +195,23 @@ public sealed class MainForm : Form
 
     void BuildSidebar()
     {
-        devicePanel.Height = LogicalToDeviceUnits(150);
         devicePanel.Click += (_, _) => ShowDeviceMenu();
-        var label = new Panel { Dock = DockStyle.Top, Height = LogicalToDeviceUnits(Theme.Space8), BackColor = Theme.ColorBg };
+        var label = libraryLabel;
         label.Paint += (_, e) =>
         {
-            // .hud-label over a hairline
-            int x = LogicalToDeviceUnits(Theme.Space3), y = label.Height - LogicalToDeviceUnits(Theme.Space4);
-            Theme.DrawTracked(e.Graphics, "LIBRARY", Theme.Label(), Theme.ColorTextMuted, new Point(x, y), Theme.TrackingLabel);
+            // Section label over a hairline; soft themes add a sparkle by it (docs/06-iconography.md).
+            var g = e.Graphics;
+            int x = LogicalToDeviceUnits(Theme.Hud ? Theme.Space3 : Theme.Space5), y = label.Height - LogicalToDeviceUnits(Theme.Space4) - (Theme.Hud ? 0 : LogicalToDeviceUnits(Theme.Space1));
+            var font = Theme.Label();
+            int w = Theme.DrawTracked(g, Theme.Case("Library"), font, Theme.ColorEyebrow, new Point(x, y), Theme.TrackingLabel);
+            if (!Theme.Hud)
+            {
+                int d = LogicalToDeviceUnits(Theme.Space3);
+                int h = TextRenderer.MeasureText(g, "X", font, Size.Empty, TextFormatFlags.NoPadding).Height;
+                Theme.DrawSparkle(g, new Rectangle(x + w + LogicalToDeviceUnits(Theme.Space1), y + (h - d) / 2, d, d), Theme.ColorAccent);
+            }
             using var pen = new Pen(Theme.Over(Theme.ColorDivider, Theme.ColorBg));
-            e.Graphics.DrawLine(pen, x, label.Height - 1, label.Width - x, label.Height - 1);
+            g.DrawLine(pen, x, label.Height - 1, label.Width - x, label.Height - 1);
         };
         tree.AfterSelect += (_, _) => ApplyView(keepScroll: false);
         tree.NodeMouseHover += (_, e) => treeTip.SetToolTip(tree, e.Node?.Tag is TreeRow { Key: Period p } && p == Period.New
@@ -231,11 +247,60 @@ public sealed class MainForm : Form
             markSeen.Enabled = library.Any(IsNew);
         };
 
-        var treeMenu = new ContextMenuStrip { Renderer = new HudRenderer() };
         var treeMark = Item("Mark everything as seen", MarkAllSeen);
         treeMenu.Items.Add(treeMark);
         treeMenu.Opening += (_, _) => treeMark.Enabled = library.Any(IsNew);
         tree.ContextMenuStrip = treeMenu;
+    }
+
+    // ---- theme --------------------------------------------------------------------------
+
+    void BuildThemeMenu()
+    {
+        themeButton.DropDown.Renderer = new HudRenderer();
+        foreach (var def in Theme.All)
+        {
+            var item = HudRenderer.Style(new ToolStripMenuItem(def.DisplayName, null, (_, _) => SwitchTheme(def)) { Tag = def }, ItemRole.Ghost);
+            themeButton.DropDownItems.Add(item);
+        }
+    }
+
+    void SwitchTheme(ThemeDef def)
+    {
+        if (!Theme.Use(def.Id)) return;
+        settings.ThemeName = def.Id;
+        settings.Save();
+        SuspendLayout();
+        ApplyTheme();
+        ResumeLayout(true);
+    }
+
+    /// <summary>
+    /// Re-applies the theme to everything that keeps a theme value (fonts, sizes, BackColor).
+    /// Paint code reads the theme on every paint; dialogs are created fresh each time.
+    /// </summary>
+    void ApplyTheme()
+    {
+        BackColor = Theme.ColorBg;
+        ForeColor = Theme.ColorText;
+        Font = Theme.Body(Theme.TextMd);
+        split.BackColor = split.Panel1.BackColor = split.Panel2.BackColor = Theme.ColorBg;
+        libraryLabel.BackColor = Theme.ColorBg;
+        libraryLabel.Height = LogicalToDeviceUnits(Theme.Hud ? Theme.Space8 : Theme.Space10);
+        searchBox.ApplyTheme(Theme.ColorBgElevated);
+        searchHost.Size = searchBox.Size;
+        foreach (var strip in new ToolStrip[] { tools, status, gridMenu, treeMenu, deviceMenu })
+            HudRenderer.Restyle(strip);
+        themeButton.Text = Theme.Current.DisplayName;
+        HudRenderer.Style(themeButton, ItemRole.Ghost);
+        foreach (ToolStripMenuItem item in themeButton.DropDownItems)
+            item.Checked = item.Tag == Theme.Current;
+        devicePanel.ApplyTheme();
+        tree.ApplyTheme();
+        grid.ApplyTheme();
+        if (IsHandleCreated) HudWindow.Apply(this);
+        UpdateSelectionInfo();
+        Invalidate(true);
     }
 
     bool IsNew(MediaEntry e) => seen != null && e.AllFiles.Any(seen.IsNew);
@@ -324,7 +389,7 @@ public sealed class MainForm : Form
         files = new();
         library = new();
         ClearThumbs();
-        grid.EmptyText = "Searching\nLooking for a connected phone.";
+        grid.EmptyText = Theme.Say("Searching\nLooking for a connected phone.", "Just a moment…\nLooking for your phone.");
         devicePanel.Set(DeviceState.Searching, device?.Name ?? "", "", "Looking for a connected phone");
         RebuildTree();
         ApplyView(keepScroll: false);
@@ -371,7 +436,7 @@ public sealed class MainForm : Form
         {
             if (seen == null || seenDevice != found.Name) { seen = new SeenStore(found.Name); seenDevice = found.Name; }
             seen.Remember(files);
-            grid.EmptyText = "Nothing on the phone\nPhotos and videos on the phone appear here.";
+            grid.EmptyText = Theme.Say("Nothing on the phone\nPhotos and videos on the phone appear here.", "Nothing here yet\nPhotos and videos on the phone will show up here ♥");
             Rebuild(keepScroll: true);
             statusLabel.Text = "Ready";
         }
@@ -492,8 +557,8 @@ public sealed class MainForm : Form
     void UpdateSelectionInfo()
     {
         var sel = grid.SelectedEntries;
-        if (sel.Count == 0) readout.Set((grid.Entries.Count.ToString("N0"), "SHOWN"));
-        else readout.Set((sel.Count.ToString("N0"), "SELECTED"), (ThumbGrid.FormatSize(sel.Sum(e => e.Primary.Size)), ""));
+        if (sel.Count == 0) readout.Set((grid.Entries.Count.ToString("N0"), "shown"));
+        else readout.Set((sel.Count.ToString("N0"), "selected"), (ThumbGrid.FormatSize(sel.Sum(e => e.Primary.Size)), ""));
         UpdateButtons();
     }
 
@@ -667,7 +732,7 @@ public sealed class MainForm : Form
         worker.Copy(requests, destination, Progress("Copying"), r => UI(() =>
         {
             EndWork();
-            var heading = r.Cancelled ? "Copy cancelled" : r.Failed.Count > 0 ? "Copy finished with errors" : "Copy complete";
+            var heading = r.Cancelled ? "Copy cancelled" : r.Failed.Count > 0 ? "Copy finished with errors" : Theme.Say("Copy complete", "Yay, all copied ♥");
             var msg = $"Copied {Plural(r.Copied, "file")} ({ThumbGrid.FormatSize(r.Bytes)}) to {destination}." +
                       (r.Skipped > 0 ? $"\nSkipped {r.Skipped:N0} already there." : "") +
                       (r.Failed.Count > 0 ? $"\n\n{r.Failed.Count:N0} failed. Check the phone is connected and unlocked, then copy again; finished files are skipped.\n" + FailureList(r.Failed) : "");
@@ -710,7 +775,7 @@ public sealed class MainForm : Form
                 RemoveDeleted(del.Deleted);
                 int movedItems = safe.Count(e => e.AllFiles.All(f => del.Deleted.Contains(f.Id)));
                 int notMoved = entries.Count - movedItems;
-                var heading = del.Cancelled ? "Move stopped" : notMoved > 0 ? "Move finished with problems" : "Move complete";
+                var heading = del.Cancelled ? "Move stopped" : notMoved > 0 ? "Move finished with problems" : Theme.Say("Move complete", "All moved ♥");
                 var msg = $"Moved {Plural(movedItems, "item")} to {destination}." +
                           (notMoved > 0
                               ? $"\n\n{Plural(notMoved, "item")} stayed on the phone. Anything copied is still on this PC, so it's safe to try again." +

@@ -9,12 +9,25 @@ RowanScherzinger/PhoneExplorer. `Updater.cs` finds them by tag `vX.Y.Z` and the 
 `PhoneExplorer.exe`, so keep both, and bump `<Version>` in the csproj before each release.
 
 ## Visual style
-Follow the style guide at `F:\Projects\StyleGuides\JarvisApps` (read its CLAUDE.md first).
-This is a native app, so it can't use `tokens.css` directly. `src/PhoneExplorer/Hud/Theme.cs`
-mirrors the tokens by hand (guide decisions/0008). Never hardcode a colour, font, size or
-duration outside `Theme.cs`. When the guide's tokens change, re-copy them into `Theme.cs` and
-update its copy date. Before finishing a UI change, search for `SystemColors`, `Color.FromArgb`,
-`MessageBox.Show` and `new Font(` outside `Theme.cs`. That search should find nothing.
+The app has swappable themes, one per style guide, picked in the status bar and saved as
+`Settings.ThemeName`:
+- Jarvis (default): `F:\Projects\StyleGuides\JarvisApps` (read its CLAUDE.md first).
+- Pastel Girl: `F:\Projects\StyleGuides\PastelGirl` (dark variant).
+
+This is a native app, so it can't use `tokens.css` directly. Each guide's tokens are mirrored
+by hand in `src/PhoneExplorer/Hud/Themes/<Guide>.cs` (a `ThemeDef`). Code reads them only
+through `Hud/Theme.cs`. Never hardcode a colour, font, size or duration outside `Hud/Theme.cs`,
+`Hud/ThemeDef.cs` and `Hud/Themes/`. Before finishing a UI change, search for `SystemColors`,
+`Color.FromArgb`, `MessageBox.Show` and `new Font(` outside those files. That search should find nothing.
+
+Rules that keep themes swappable:
+- Paint code reads `Theme` on every paint. A control that caches a theme value (Font, size,
+  BackColor) needs an `ApplyTheme()` that `MainForm.ApplyTheme` calls.
+- Write label, heading and button text in sentence case. `Theme.Case()` uppercases it for HUD themes.
+- Use the role helpers: `Theme.Body/Label/Heading/ButtonFont/Number/BigNumber`,
+  `Theme.Fill/Stroke` with a `Corner`, and `Theme.DrawStatus`. HUD-only details (brackets, edge
+  bars, boot flicker) check `Theme.Hud`.
+- Adding a guide means a new `Themes/*.cs` and an entry in `Theme.All`.
 
 ## Phone access
 All shell/WPD access goes through `PhoneWorker`'s single STA thread. Never create shell items on

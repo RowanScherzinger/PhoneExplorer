@@ -9,7 +9,7 @@ public sealed record EntryGroup(string Title, int Start, int Count);
 /// <summary>
 /// A scrolling grid of thumbnails split into titled groups (months). Thumbnails come from
 /// ThumbnailSource; the grid reports which visible ones are missing via ThumbnailsNeeded.
-/// Drawn in the Jarvis HUD style: copper frames, gold selection, brackets that lock on hover.
+/// Drawn in the current theme: HUD frames with brackets that lock on hover, or soft rounded tiles.
 /// </summary>
 public sealed class ThumbGrid : ScrollableControl
 {
@@ -41,14 +41,22 @@ public sealed class ThumbGrid : ScrollableControl
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         AutoScroll = true;
-        BackColor = Theme.ColorBg;
-        Font = Theme.Mono(Theme.TextSm);
         TabStop = true;
+        ApplyTheme();
         clock.Tick += (_, _) =>
         {
             if ((DateTime.UtcNow - hoverStart).TotalMilliseconds > Theme.DurationNormal) clock.Stop();
             if (hover >= 0) InvalidateTile(hover);
         };
+    }
+
+    /// <summary>Re-reads the theme: background, label font and layout.</summary>
+    public void ApplyTheme()
+    {
+        BackColor = Theme.ColorBg;
+        Font = Theme.Body(Theme.TextSm);
+        DoLayout();
+        Invalidate();
     }
 
     /// <summary>First line is the heading; the rest is sentence-case prose.</summary>
@@ -195,9 +203,9 @@ public sealed class ThumbGrid : ScrollableControl
     void DrawEmpty(Graphics g)
     {
         var lines = emptyText.Split('\n', 2);
-        var heading = lines[0].TrimEnd('.').ToUpperInvariant();
+        var heading = Theme.Case(lines[0].TrimEnd('.'));
         var body = lines.Length > 1 ? lines[1].Trim('\n') : "";
-        var hf = Theme.Font(Theme.FontDisplayBold, Theme.TextLg);
+        var hf = Theme.Heading(Theme.Hud ? Theme.TextLg : Theme.TextXl);
         var hs = Theme.MeasureTracked(g, heading, hf, Theme.TrackingWide);
         var bf = Theme.Sans(Theme.TextMd);
         int width = Math.Min(ClientSize.Width - S(Theme.Space8) * 2, S(520));
@@ -205,11 +213,18 @@ public sealed class ThumbGrid : ScrollableControl
         int total = hs.Height + S(Theme.Space4) + bs.Height;
         int y = (ClientSize.Height - total) / 2;
 
-        // A bracketed frame around the message, like a targeting reticle on empty space.
+        // HUD: a bracketed frame around the message, like a targeting reticle on empty space.
+        // Soft: a small sparkle motif above it (docs/04-components.md: Empty states).
         var frame = new Rectangle((ClientSize.Width - width) / 2 - S(Theme.Space6), y - S(Theme.Space6), width + S(Theme.Space6) * 2, total + S(Theme.Space6) * 2);
         Theme.DrawBrackets(g, frame, Theme.Alpha(Theme.ColorAccent, Theme.BracketRestOpacity), S(Theme.BracketSize), Theme.LineThin);
+        if (!Theme.Hud)
+        {
+            int m = S(Theme.Space6), my = y - m - S(Theme.Space4);
+            Theme.DrawSparkle(g, new Rectangle((ClientSize.Width - m) / 2, my, m, m), Theme.ColorAccent);
+            Theme.DrawSparkle(g, new Rectangle(ClientSize.Width / 2 + m / 2 + S(Theme.Space1), my - S(Theme.Space1), m / 2, m / 2), Theme.Alpha(Theme.ColorAccent, 0.6f));
+        }
 
-        Theme.DrawTracked(g, heading, hf, Theme.ColorAccent, new Point((ClientSize.Width - hs.Width) / 2, y), Theme.TrackingWide);
+        Theme.DrawTracked(g, heading, hf, Theme.ColorAccentText, new Point((ClientSize.Width - hs.Width) / 2, y), Theme.TrackingWide);
         TextRenderer.DrawText(g, body, bf, new Rectangle((ClientSize.Width - width) / 2, y + hs.Height + S(Theme.Space4), width, bs.Height),
             Theme.ColorTextMuted, TextFormatFlags.WordBreak | TextFormatFlags.HorizontalCenter);
     }
@@ -220,25 +235,25 @@ public sealed class ThumbGrid : ScrollableControl
         var r = new Rectangle(Side, row.Y - ScrollY, ClientSize.Width - Side * 2, row.Height);
         int baseline = r.Bottom - S(Theme.Space2);
 
-        // Month title: display face, uppercase, copper (a section heading).
-        var title = group.Title.ToUpperInvariant();
-        var tf = Theme.Font(Theme.FontDisplayBold, Theme.TextLg);
+        // Month title: display face in the theme's case, accent (a section heading).
+        var title = Theme.Case(group.Title);
+        var tf = Theme.Heading(Theme.TextLg);
         var ts = Theme.MeasureTracked(g, title, tf, Theme.TrackingWide);
-        int x = r.X + Theme.DrawTracked(g, title, tf, Theme.ColorAccent, new Point(r.X, baseline - ts.Height), Theme.TrackingWide) + S(Theme.Space4);
+        int x = r.X + Theme.DrawTracked(g, title, tf, Theme.ColorAccentText, new Point(r.X, baseline - ts.Height), Theme.TrackingWide) + S(Theme.Space4);
 
-        // Count readout: gold tabular value + muted unit.
+        // Count readout: tabular value + muted unit.
         int selectedInGroup = 0;
         for (int i = group.Start; i < group.Start + group.Count; i++)
             if (selected.Contains(entries[i].Key)) selectedInGroup++;
-        x = Readout(g, x, baseline, group.Count.ToString("N0"), group.Count == 1 ? "ITEM" : "ITEMS");
-        if (selectedInGroup > 0) x = Readout(g, x + S(Theme.Space2), baseline, selectedInGroup.ToString("N0"), "SELECTED");
+        x = Readout(g, x, baseline, group.Count.ToString("N0"), group.Count == 1 ? "item" : "items");
+        if (selectedInGroup > 0) x = Readout(g, x + S(Theme.Space2), baseline, selectedInGroup.ToString("N0"), "selected");
 
         if (row.Group == hoverHeader)
         {
-            var hint = selectedInGroup == group.Count ? "CLICK TO CLEAR MONTH" : "CLICK TO SELECT MONTH";
+            var hint = Theme.Case(selectedInGroup == group.Count ? "Click to clear month" : "Click to select month");
             var lf = Theme.Label();
             var hs = Theme.MeasureTracked(g, hint, lf, Theme.TrackingLabel);
-            Theme.DrawTracked(g, hint, lf, Theme.ColorAccent, new Point(r.Right - hs.Width, baseline - hs.Height - S(2)), Theme.TrackingLabel);
+            Theme.DrawTracked(g, hint, lf, Theme.ColorAccentText, new Point(r.Right - hs.Width, baseline - hs.Height - S(2)), Theme.TrackingLabel);
         }
 
         // Hairline that fades into the background on the right.
@@ -249,11 +264,12 @@ public sealed class ThumbGrid : ScrollableControl
 
     int Readout(Graphics g, int x, int baseline, string value, string unit)
     {
-        var vf = Theme.Mono(Theme.TextMd);
+        var vf = Theme.Number(Theme.TextMd);
         var vs = TextRenderer.MeasureText(g, value, vf, Size.Empty, TextFormatFlags.NoPadding);
         TextRenderer.DrawText(g, value, vf, new Point(x, baseline - vs.Height - S(1)), Theme.ColorHighlight, TextFormatFlags.NoPadding);
         x += vs.Width + S(Theme.Space1);
         var lf = Theme.Label();
+        unit = Theme.Case(unit);
         var ls = Theme.MeasureTracked(g, unit, lf, Theme.TrackingLabel);
         return x + Theme.DrawTracked(g, unit, lf, Theme.ColorTextMuted, new Point(x, baseline - ls.Height - S(2)), Theme.TrackingLabel);
     }
@@ -265,13 +281,11 @@ public sealed class ThumbGrid : ScrollableControl
         r.Offset(0, -ScrollY);
         bool isSelected = selected.Contains(entry.Key), isHover = i == hover;
 
-        // Tile states: hover = accent-soft; selected = gold tint and hairline (gold is the signal).
+        // Tile states: hover = accent-soft; selected = selection tint and ring (the selection colour is the signal).
         if (isSelected || isHover)
         {
-            using var fill = new SolidBrush(isSelected ? Theme.ColorHighlightSoft : Theme.ColorAccentSoft);
-            g.FillRectangle(fill, r);
-            using var pen = new Pen(isSelected ? Theme.Alpha(Theme.ColorHighlight, 0.5f) : Theme.ColorBorder);
-            g.DrawRectangle(pen, r.X, r.Y, r.Width - 1, r.Height - 1);
+            Theme.Fill(g, isSelected ? Theme.ColorSelectSoft : Theme.ColorAccentSoft, r, Theme.Corner.Md);
+            Theme.Stroke(g, isSelected ? Theme.ColorSelectRing : Theme.ColorBorder, r, Theme.Corner.Md, isSelected && !Theme.Hud ? Theme.LineThin : Theme.LineHair);
         }
 
         var box = new Rectangle(r.X + Pad, r.Y + Pad, S(thumbSize), S(thumbSize));
@@ -282,40 +296,47 @@ public sealed class ThumbGrid : ScrollableControl
             float scale = Math.Min((float)box.Width / bmp.Width, (float)box.Height / bmp.Height);
             int w = (int)(bmp.Width * scale), h = (int)(bmp.Height * scale);
             pic = new Rectangle(box.X + (box.Width - w) / 2, box.Y + (box.Height - h) / 2, w, h);
-            g.DrawImage(bmp, pic);
+            int radius = Theme.Radius(g, Theme.Corner.Sm, pic);
+            if (radius == 0) g.DrawImage(bmp, pic);
+            else
+            {
+                // Rounded photo: paint the path with the picture as its texture, so the corners are smooth.
+                using var texture = new TextureBrush(bmp, WrapMode.Clamp);
+                texture.TranslateTransform(pic.X, pic.Y);
+                texture.ScaleTransform((float)pic.Width / bmp.Width, (float)pic.Height / bmp.Height);
+                using var path = Theme.RoundRect(pic, radius);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.FillPath(texture, path);
+                g.SmoothingMode = SmoothingMode.None;
+            }
         }
         else
         {
             // Skeleton: a hairline outline of what will appear, not a grey block.
             pic = box;
-            using var pen = new Pen(Theme.ColorBorder);
-            g.DrawRectangle(pen, box.X, box.Y, box.Width - 1, box.Height - 1);
+            Theme.Stroke(g, Theme.ColorBorder, box, Theme.Corner.Sm);
             var lf = Theme.Label();
             var ext = entry.Display.Ext;
             var es = Theme.MeasureTracked(g, ext, lf, Theme.TrackingLabel);
             Theme.DrawTracked(g, ext, lf, Theme.ColorTextDim, new Point(box.X + (box.Width - es.Width) / 2, box.Y + (box.Height - es.Height) / 2), Theme.TrackingLabel);
         }
 
-        // Badges on the picture: neutral data in silver, NEW is the info status (blue + circle).
-        int inset = S(Theme.Space1);
+        // Badges on the picture: neutral data in silver, "new" is the info colour with the new mark.
+        int inset = S(Theme.Space1) + (Theme.Current.RadiusSm > 0 ? S(2) : 0);
         int bx = pic.X + inset;
-        if (IsNew?.Invoke(entry) == true) bx = Badge(g, "NEW", bx, pic.Y + inset, Theme.ColorInfo, Theme.Shape.Circle) + S(2);
-        if (entry.HasLive) Badge(g, "LIVE", bx, pic.Y + inset, Theme.ColorNeutralData, null);
+        if (IsNew?.Invoke(entry) == true) bx = Badge(g, "New", bx, pic.Y + inset, Theme.ColorInfo, BadgeMark.New) + S(2);
+        if (entry.HasLive) Badge(g, "Live", bx, pic.Y + inset, Theme.ColorNeutralData);
         if (entry.IsEdited)
-        {
-            var lf = Theme.Label();
-            int w = Theme.MeasureTracked(g, "EDITED", lf, Theme.TrackingLabel).Width + S(Theme.Space2) * 2;
-            Badge(g, "EDITED", pic.Right - inset - w, pic.Y + inset, Theme.ColorNeutralData, null);
-        }
+            Badge(g, "Edited", pic.Right - inset - BadgeWidth(g, "Edited", BadgeMark.None), pic.Y + inset, Theme.ColorNeutralData);
         if (entry.Kind == MediaKind.Video)
         {
             var d = entry.Primary.Duration;
-            var text = d == null ? "VIDEO" : d.Value.TotalHours >= 1 ? d.Value.ToString(@"h\:mm\:ss") : d.Value.ToString(@"m\:ss");
-            Badge(g, text, pic.X + inset, pic.Bottom - inset - S(16), Theme.ColorText, Theme.Shape.Triangle, play: true);
+            var text = d == null ? "Video" : d.Value.TotalHours >= 1 ? d.Value.ToString(@"h\:mm\:ss") : d.Value.ToString(@"m\:ss");
+            Badge(g, text, pic.X + inset, pic.Bottom - inset - S(16), Theme.ColorText, BadgeMark.Play);
         }
 
-        // Brackets: copper, locking on (scale in from 115%) on hover; gold and steady when selected.
-        if (isSelected || isHover)
+        // HUD brackets: accent, locking on (scale in from 115%) on hover; steady in the selection colour when selected.
+        if ((isSelected || isHover) && Theme.Hud)
         {
             var target = Rectangle.Inflate(r, -1, -1);
             float t = isHover && !isSelected && !Theme.ReducedMotion
@@ -323,18 +344,18 @@ public sealed class ThumbGrid : ScrollableControl
                 : 1f;
             float grow = (1 - t) * 0.15f;
             var br = Rectangle.Inflate(target, (int)(target.Width * grow / 2), (int)(target.Height * grow / 2));
-            Theme.DrawBrackets(g, br, Theme.Alpha(isSelected ? Theme.ColorHighlight : Theme.ColorAccent, t), S(Theme.BracketSize), Theme.LineThin);
+            Theme.DrawBrackets(g, br, Theme.Alpha(isSelected ? Theme.ColorSelect : Theme.ColorAccent, t), S(Theme.BracketSize), Theme.LineThin);
         }
 
         if (isSelected)
         {
-            // Selection mark: a gold square with a black tick (the on-accent colour).
-            int d = S(Theme.Space4);
+            // Selection mark: the selection colour (a square, or a dot in round themes) with an on-accent tick.
+            int d = Theme.Hud ? S(Theme.Space4) : S(Theme.Space5);
             var c = new Rectangle(pic.Right - d - inset, pic.Bottom - d - inset, d, d);
-            using var b = new SolidBrush(Theme.ColorHighlight);
-            g.FillRectangle(b, c);
+            Theme.Fill(g, Theme.ColorSelect, c, Theme.Corner.Pill);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using var pen = new Pen(Theme.ColorOnAccent, S(2)) { LineJoin = LineJoin.Miter };
+            var cap = Theme.Hud ? LineCap.Flat : LineCap.Round;
+            using var pen = new Pen(Theme.ColorOnAccent, S(2)) { LineJoin = Theme.Hud ? LineJoin.Miter : LineJoin.Round, StartCap = cap, EndCap = cap };
             g.DrawLines(pen, new[] { new PointF(c.X + d * 0.22f, c.Y + d * 0.52f), new PointF(c.X + d * 0.42f, c.Y + d * 0.72f), new PointF(c.X + d * 0.78f, c.Y + d * 0.3f) });
             g.SmoothingMode = SmoothingMode.None;
         }
@@ -343,23 +364,29 @@ public sealed class ThumbGrid : ScrollableControl
         TextRenderer.DrawText(g, entry.Primary.Name, Font, label, isSelected ? Theme.ColorTextStrong : Theme.ColorTextMuted,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
 
-        if (i == focus && Focused && keyboardFocus) Theme.DrawFocusRing(g, r, S(2));
+        if (i == focus && Focused && keyboardFocus) Theme.DrawFocusRing(g, r, S(2), Theme.Corner.Md);
     }
 
-    /// <summary>A small chip over the photo (--radius-sm corners are sharp at this size). Returns its right edge.</summary>
-    int Badge(Graphics g, string text, int x, int y, Color color, Theme.Shape? shape, bool play = false)
+    enum BadgeMark { None, New, Play }
+
+    int BadgeWidth(Graphics g, string text, BadgeMark mark) =>
+        Theme.MeasureTracked(g, Theme.Case(text), Theme.Label(), Theme.TrackingLabel).Width
+        + (mark == BadgeMark.None ? 0 : S(6) + S(Theme.Space1)) + S(Theme.Space2) * 2 - S(2);
+
+    /// <summary>A small chip over the photo (HUD: square, --radius-sm is sharp at this size; soft: a pill). Returns its right edge.</summary>
+    int Badge(Graphics g, string text, int x, int y, Color color, BadgeMark mark = BadgeMark.None)
     {
+        var r = new Rectangle(x, y, BadgeWidth(g, text, mark), S(16));
+        text = Theme.Case(text);
         var lf = Theme.Label();
         var ts = Theme.MeasureTracked(g, text, lf, Theme.TrackingLabel);
-        int mark = shape == null ? 0 : S(6) + S(Theme.Space1);
-        var r = new Rectangle(x, y, ts.Width + mark + S(Theme.Space2) * 2 - S(2), S(16));
-        using (var fill = new SolidBrush(Theme.ColorScrim)) g.FillRectangle(fill, r);
+        Theme.Fill(g, Theme.ColorScrim, r, Theme.Corner.Pill);
         int tx = r.X + S(Theme.Space2) - S(1);
-        if (shape is { } s)
+        if (mark != BadgeMark.None)
         {
             int d = S(6);
             var sr = new Rectangle(tx, r.Y + (r.Height - d) / 2, d, d);
-            if (play)
+            if (mark == BadgeMark.Play)
             {
                 // Play mark: a right-pointing triangle polygon.
                 g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -367,8 +394,8 @@ public sealed class ThumbGrid : ScrollableControl
                 g.FillPolygon(b, new[] { new Point(sr.X, sr.Y), new Point(sr.Right, sr.Y + d / 2), new Point(sr.X, sr.Bottom) });
                 g.SmoothingMode = SmoothingMode.None;
             }
-            else Theme.DrawShape(g, s, sr, color);
-            tx += mark;
+            else Theme.DrawNewMark(g, sr, color);
+            tx += d + S(Theme.Space1);
         }
         Theme.DrawTracked(g, text, lf, color, new Point(tx, r.Y + (r.Height - ts.Height) / 2), Theme.TrackingLabel);
         return r.Right;
