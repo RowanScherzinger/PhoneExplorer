@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>PhoneExplorer</AssemblyName>
+    <RootNamespace>PhoneExplorer</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Framework-dependent single exe: small, needs the .NET 10 Desktop Runtime. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+</Project>

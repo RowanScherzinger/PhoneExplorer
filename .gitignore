@@ -1,0 +1,7 @@
+bin/
+obj/
+publish/
+.vs/
+*.user
+# Builds go in GitHub releases, not in git.
+/PhoneExplorer.exe
