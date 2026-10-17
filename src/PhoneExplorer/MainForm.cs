@@ -65,10 +65,12 @@ public sealed class MainForm : Form
     SeenStore? seen;
     string? seenDevice;
     bool scanning, busy, pendingRescan;
+    /// <summary>A newer release waiting to be offered once the current copy, move or delete finishes.</summary>
+    Updater.Release? pendingUpdate;
 
     public MainForm()
     {
-        Text = "Phone Explorer";
+        Text = $"Phone Explorer {Updater.Current.ToString(3)}";
         AutoScaleMode = AutoScaleMode.Dpi;
         Size = new Size(1280, 820);
         MinimumSize = new Size(760, 480);
@@ -116,6 +118,8 @@ public sealed class MainForm : Form
             split.SplitterDistance = LogicalToDeviceUnits(240);
             devicePanel.Boot();
             StartScan();
+            Updater.CleanUp();
+            CheckForUpdate();
         };
         FormClosing += OnClosing;
         UpdateButtons();
@@ -572,6 +576,48 @@ public sealed class MainForm : Form
         progress.Visible = cancelButton.Visible = false;
         statusLabel.Text = "Ready";
         UpdateButtons();
+        if (pendingUpdate != null) BeginInvoke(OfferUpdate);
+    }
+
+    // ---- updates -------------------------------------------------------------------------
+
+    async void CheckForUpdate()
+    {
+        pendingUpdate = await Updater.CheckAsync();
+        if (pendingUpdate != null && !busy && !IsDisposed) OfferUpdate();
+    }
+
+    /// <summary>Asks once per session; never while a copy, move or delete is running.</summary>
+    async void OfferUpdate()
+    {
+        var release = pendingUpdate;
+        if (release == null || busy || IsDisposed) return;
+        pendingUpdate = null;
+        if (HudDialog.Show(this, "Update available",
+                $"Phone Explorer {release.Version.ToString(3)} is available. You have {Updater.Current.ToString(3)}.\n\n" +
+                "Updating takes a moment: the app downloads the new version, closes, and opens again. Nothing on your phone or PC is changed.",
+                ("Update now", ButtonKind.Primary, DialogResult.Yes), ("Later", ButtonKind.Ghost, DialogResult.No)) != DialogResult.Yes)
+            return;
+
+        busy = true;
+        UpdateButtons();
+        settings.Save();
+        statusLabel.Text = $"Downloading Phone Explorer {release.Version.ToString(3)}…";
+        progress.SetProgress(0, 1);
+        progress.Visible = true;
+        var error = await Updater.InstallAsync(release, new Progress<(long Done, long Total)>(p =>
+            progress.SetProgress((int)(p.Done / 1024), (int)Math.Max(1, p.Total / 1024))));
+        if (error == null)
+        {
+            // The new copy is starting: quit without the "work in progress" question.
+            busy = false;
+            Close();
+            return;
+        }
+        EndWork();
+        HudDialog.Show(this, "Couldn't update",
+            $"The update didn't install: {error}\nThis version still works. You can also download the new version from {Updater.ReleasesPage}",
+            CloseButton);
     }
 
     Action<int, int, string> Progress(string verb) => (i, total, name) => UI(() =>

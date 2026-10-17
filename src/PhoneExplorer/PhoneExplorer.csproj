@@ -9,7 +9,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>PhoneExplorer</AssemblyName>
     <RootNamespace>PhoneExplorer</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Framework-dependent single exe: small, needs the .NET 10 Desktop Runtime. -->
     <PublishSingleFile>true</PublishSingleFile>

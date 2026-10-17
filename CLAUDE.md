@@ -4,6 +4,10 @@ Phone Explorer (formerly iPhone Explorer): a small C# WinForms (.NET 10) app for
 copying photos off an iPhone or Android phone over USB. Source in `src/PhoneExplorer`. Build with
 `dotnet publish src\PhoneExplorer -c Release -o publish`, then copy `publish\PhoneExplorer.exe` to the repo root.
 
+Releases are self-contained builds (see README) attached to GitHub releases on
+RowanScherzinger/PhoneExplorer. `Updater.cs` finds them by tag `vX.Y.Z` and the asset name
+`PhoneExplorer.exe`, so keep both, and bump `<Version>` in the csproj before each release.
+
 ## Visual style
 Follow the style guide at `F:\Projects\StyleGuides\JarvisApps` (read its CLAUDE.md first).
 This is a native app, so it can't use `tokens.css` directly. `src/PhoneExplorer/Hud/Theme.cs`

@@ -12,6 +12,8 @@ without digging through the phone's folders.
    - **iPhone:** tap **Trust** when the phone asks.
 4. Your photos appear in the app after a few seconds. Select some and click **COPY SELECTED** to save them on the PC.
 
+The app checks for a new version each time it starts. When there is one, it asks, then downloads it, closes and opens again by itself.
+
 ## What it does
 
 - All photos and videos in one grid, newest first, under month headings. The tree on the left jumps to a year or month.
@@ -48,8 +50,12 @@ dotnet publish src\PhoneExplorer -c Release -o publish
 
 Then copy `publish\PhoneExplorer.exe` to this folder. That build is small but needs the .NET 10 Desktop Runtime.
 
-Release builds include the runtime, so they run on any Windows PC:
+Release builds include the runtime, so they run on any Windows PC. To release, bump `<Version>` in the csproj, build as below, and attach the exe to a GitHub release tagged `vX.Y.Z` with the asset named exactly `PhoneExplorer.exe`. Running copies update to the newest non-draft, non-prerelease release.
 
 ```
 dotnet publish src\PhoneExplorer -c Release -o publish -p:SelfContained=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
