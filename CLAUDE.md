@@ -29,6 +29,23 @@ Rules that keep themes swappable:
   bars, boot flicker) check `Theme.Hud`.
 - Adding a guide means a new `Themes/*.cs` and an entry in `Theme.All`.
 
+## Disk cache
+Everything the app keeps on disk besides settings goes through `AppCache`: thumbnails, opened files,
+files pulled for duplicate checks, and the PC folder index. Never write temp or cache files anywhere
+else. Write a file with `Put` (or `Stage` then `Commit`), and read it with `Get`.
+- The cache owns only its `PhoneExplorer cache` folder, and only when its marker file is present.
+- At startup it deletes anything there that `index.json` doesn't list.
+- It evicts least-recently-used entries to stay under `Settings.CacheLimitGb`.
+- Key phone files with `PhoneWorker.FileKey` (device, folder, name, size). Ids change on every scan.
+
+## Duplicates
+`DuplicateFinder` compares phone files with PC folders.
+- The phone gives only name, size and date over USB: no resolution or duration. Anything more needs the
+  file pulled into the cache through `PhoneWorker.Fetch`. Pull only files that already matched.
+- Read dates the same way on both sides (`Shell.Date`/`LocalProperties`, FILETIME → local). PowerShell's `LastWriteTime` can be an hour off.
+- The folders checked never include the cache, so a cached copy can't count as a backup.
+- Delete removes the phone copy. "Select all duplicates" takes only `Exact` and `SameFile` items, where every file except `.AAE` matched.
+
 ## Phone access
 All shell/WPD access goes through `PhoneWorker`'s single STA thread. Never create shell items on
 the UI thread, and never rebuild an item from a path string: WPD paths don't round-trip.

@@ -25,12 +25,18 @@ public sealed class PhoneWorker : IDisposable
     readonly Queue<Action> queue = new();
     readonly AutoResetEvent signal = new(false);
     readonly Dictionary<int, IShellItem> items = new();
+    /// <summary>Per id: a key that names the same phone file across scans (device, folder, name, size), for the cache.</summary>
+    readonly Dictionary<int, string> keys = new();
+    string deviceName = "";
     List<int> wantedThumbs = new();
     int wantedSize;
     int nextId = 1;
     volatile bool stopping;
 
     public volatile bool CancelRequested;
+
+    /// <summary>The app cache: thumbnails and fetched files are kept there. Set once at startup.</summary>
+    public AppCache? Cache { get; init; }
 
     /// <summary>Raised on the worker thread; bitmap is null when the shell has no thumbnail.</summary>
     public event Action<int, Bitmap?>? ThumbnailReady;
@@ -78,17 +84,38 @@ public sealed class PhoneWorker : IDisposable
             }
             else if (id >= 0)
             {
-                Bitmap? bmp = null;
-                if (items.TryGetValue(id, out var item))
-                {
-                    try { bmp = Shell.Thumbnail(item, px); }
-                    catch (Exception ex) when (ex is COMException or InvalidCastException) { }
-                }
-                ThumbnailReady?.Invoke(id, bmp);
+                ThumbnailReady?.Invoke(id, Thumbnail(id, px));
             }
             else signal.WaitOne();
         }
     }
+
+    /// <summary>A thumbnail from the cache, or made by the shell (and then cached). Null when the shell has none.</summary>
+    Bitmap? Thumbnail(int id, int px)
+    {
+        if (!items.TryGetValue(id, out var item)) return null;
+        string? key = keys.TryGetValue(id, out var k) ? $"thumb|{k}|{px}" : null;
+        if (key != null && Cache?.Get(key) is { } cached)
+        {
+            try
+            {
+                // Read through memory so the cached file isn't kept locked by GDI+.
+                using var ms = new MemoryStream(File.ReadAllBytes(cached));
+                using var img = Image.FromStream(ms);
+                return new Bitmap(img);
+            }
+            catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { Cache.Remove(key); }
+        }
+        Bitmap? bmp = null;
+        try { bmp = Shell.Thumbnail(item, px); }
+        catch (Exception ex) when (ex is COMException or InvalidCastException) { }
+        if (bmp != null && key != null)
+            Cache?.Put(key, "thumb.jpg", path => bmp.Save(path, System.Drawing.Imaging.ImageFormat.Jpeg));
+        return bmp;
+    }
+
+    /// <summary>The cache key for a phone file, stable across scans.</summary>
+    public static string FileKey(string device, MediaFile f) => $"{device}|{f.Folder}|{f.Name}|{f.Size}";
 
     // Every WPD device (phones, cameras) has this device interface in its parsing name.
     const string WpdInterface = "{6ac27878-a6fa-4155-ba85-f98f491d4f33}";
@@ -133,6 +160,7 @@ public sealed class PhoneWorker : IDisposable
     public void Scan(string? deviceId, Action<PhoneDevice> opened, Action<string> status, Action<List<MediaFile>> batch, Action<PhoneDevice?, string?> done) => Post(() =>
     {
         items.Clear();
+        keys.Clear();
         lock (gate) wantedThumbs = new();
         IShellItem deviceItem;
         PhoneDevice device;
@@ -146,6 +174,7 @@ public sealed class PhoneWorker : IDisposable
 
         try
         {
+            deviceName = device.Name;
             opened(device);
             status($"Opening {device.Name}…");
             var storages = Shell.Children(deviceItem).ToList();
@@ -235,7 +264,9 @@ public sealed class PhoneWorker : IDisposable
                    ?? Library.FolderDate(folder)
                    ?? DateTime.MinValue;
         var kind = Library.KindOf(Path.GetExtension(name).TrimStart('.').ToUpperInvariant(), folder, name);
-        return new MediaFile(id, name, folder, Shell.Size(item), date, kind == MediaKind.Video ? Shell.Duration(item) : null);
+        var file = new MediaFile(id, name, folder, Shell.Size(item), date, kind == MediaKind.Video ? Shell.Duration(item) : null);
+        keys[id] = FileKey(deviceName, file);
+        return file;
     }
 
     public void Copy(List<CopyRequest> requests, string destination, Action<int, int, string> progress, Action<CopyResult> done) => Post(() =>
@@ -325,20 +356,34 @@ public sealed class PhoneWorker : IDisposable
         catch (COMException) { return false; }
     }
 
-    /// <summary>Copies a file to a temp folder so it can be opened with the default app.</summary>
-    public void CopyToTemp(MediaFile file, Action<string?, string?> done) => Post(() =>
+    /// <summary>
+    /// Gets a local copy of a phone file, from the app cache or copied into it, to open it or compare it.
+    /// done(path, error): the cached file's path, or null and why not.
+    /// </summary>
+    public void Fetch(MediaFile file, Action<string?, string?> done) => Post(() =>
     {
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "PhoneExplorer");
-            var target = Path.Combine(dir, file.Name);
-            if (!(File.Exists(target) && new FileInfo(target).Length == file.Size))
+            if (!items.TryGetValue(file.Id, out var item) || !keys.TryGetValue(file.Id, out var key))
+                throw new IOException("the phone was rescanned or disconnected");
+            key = "file|" + key;
+            if (Cache?.Get(key) is { } cached && new FileInfo(cached).Length == file.Size) { done(cached, null); return; }
+            var dir = Cache?.Stage() ?? throw new IOException("the cache folder can't be used; check it in Settings");
+            string? path;
+            try
             {
-                if (File.Exists(target)) File.Delete(target);
-                if (!items.TryGetValue(file.Id, out var item)) throw new IOException("the phone was rescanned or disconnected");
                 Shell.Copy(item, dir, null);
+                var staged = Path.Combine(dir, file.Name);
+                if (!File.Exists(staged) || new FileInfo(staged).Length != file.Size)
+                    throw new IOException("the copy doesn't match the phone's file size");
+                path = Cache.Commit(key, staged) ?? throw new IOException("the file is bigger than the cache allows; raise the limit in Settings");
             }
-            done(target, null);
+            finally
+            {
+                // Commit removes the staged folder; after a failed or partial copy, remove it here.
+                Cache.Discard(dir);
+            }
+            done(path, null);
         }
         catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException)
         {

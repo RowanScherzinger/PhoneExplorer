@@ -147,6 +147,12 @@ public static class Shell
     public static PROPERTYKEY PKEY_DateModified = new(FMTID_Storage, 14);
     public static PROPERTYKEY PKEY_DateCreated = new(FMTID_Storage, 15);
     public static PROPERTYKEY PKEY_Media_Duration = new(new Guid("64440490-4C8B-11D1-8B70-080036B11A03"), 3);
+    public static PROPERTYKEY PKEY_Photo_DateTaken = new(new Guid("14B81DA1-0135-4D31-96D9-6CBFC9671A99"), 36867);
+    public static PROPERTYKEY PKEY_Media_DateEncoded = new(new Guid("2E4B640D-5019-46D8-8881-55414CC5CAA0"), 100);
+    public static PROPERTYKEY PKEY_Image_Width = new(new Guid("6444048F-4C8B-11D1-8B70-080036B11A03"), 3);
+    public static PROPERTYKEY PKEY_Image_Height = new(new Guid("6444048F-4C8B-11D1-8B70-080036B11A03"), 4);
+    public static PROPERTYKEY PKEY_Video_Width = new(new Guid("64440491-4C8B-11D1-8B70-080036B11A03"), 3);
+    public static PROPERTYKEY PKEY_Video_Height = new(new Guid("64440491-4C8B-11D1-8B70-080036B11A03"), 4);
 
     [DllImport("shell32.dll", PreserveSig = false)]
     static extern void SHGetKnownFolderItem([In] ref Guid rfid, int flags, IntPtr hToken, [In] ref Guid riid,
@@ -214,6 +220,26 @@ public static class Shell
             return ((IShellItem2)item).GetUInt64(ref key, out var v) == 0 && v > 0 ? TimeSpan.FromTicks((long)v) : null;
         }
         catch (COMException) { return null; }
+    }
+
+    /// <summary>A 32-bit property such as a width, or 0 when the item doesn't have it.</summary>
+    public static int UInt32(IShellItem item, PROPERTYKEY key)
+    {
+        try { ((IShellItem2)item).GetUInt32(ref key, out var v); return (int)Math.Min(v, int.MaxValue); }
+        catch (COMException) { return 0; }
+    }
+
+    /// <summary>Dates, size and duration of a file on this PC, read the same way as the phone's (FILETIME, as local time).</summary>
+    public static (DateTime? Taken, DateTime? Encoded, DateTime? Modified, int Width, int Height, TimeSpan? Duration) LocalProperties(string path)
+    {
+        var item = FromFileSystemPath(path);
+        try
+        {
+            int w = UInt32(item, PKEY_Image_Width), h = UInt32(item, PKEY_Image_Height);
+            if (w == 0 || h == 0) { w = UInt32(item, PKEY_Video_Width); h = UInt32(item, PKEY_Video_Height); }
+            return (Date(item, PKEY_Photo_DateTaken), Date(item, PKEY_Media_DateEncoded), Date(item, PKEY_DateModified), w, h, Duration(item));
+        }
+        finally { Marshal.ReleaseComObject(item); }
     }
 
     /// <summary>Whether the device says this item may be deleted.</summary>

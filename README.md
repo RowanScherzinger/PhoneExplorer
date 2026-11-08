@@ -22,7 +22,18 @@ The app checks for a new version each time it starts. When there is one, it asks
 - Select with click, Ctrl/Shift+click, Ctrl+A, or click a month heading to select the whole month.
 - **COPY SELECTED** copies into `Year\MM Month` folders (optional) and skips files already copied. Ctrl+C copies the selection. Double-click opens a photo.
 - **MOVE TO PC** (Ctrl+X) is cut and paste: it copies each item with all its files, checks every copy on the PC, and only then deletes it from the phone. If any file of an item fails, that item stays on the phone.
-- **DELETE** (Del) removes items from the phone after a confirmation that shows how many are already in your copy folder. It can't be undone from the PC.
+- **DELETE** (Del) removes items from the phone after a confirmation that shows how many are already on the PC. It can't be undone from the PC.
+- **Sort: Largest** puts the biggest items first, grouped by size (1 GB and over, 100 MB to 1 GB, and so on), to find what takes up space. Click a size heading to select the whole group.
+- **FIND ON PC** checks folders on the PC for items that are already there, and lists them under "On PC already":
+  - **Exact match**: the same bytes or pixels. Exact mode only.
+  - **Same file on PC**: same size and format, and the same name or the same time taken.
+  - **Same photo, different file**: same name, time and resolution, but a different file, for example converted to JPG.
+  - **Partly on PC**: for example, the photo is there but its Live Photo clip isn't.
+
+  Right-click → **Select all duplicates** selects only the exact and same-file ones, ready to Delete from the phone.
+
+  With **Exact match** ticked, photos are copied from the phone and compared pixel by pixel, and videos are also compared on length and resolution. That's slower. HEIC needs the free HEIF and HEVC extensions from the Microsoft Store.
+- **Settings** (bottom right) sets where the cache goes and how big it may grow (20 GB by default). The cache holds thumbnails, opened files, and copies made by Find on PC. Changing the location moves the cache there. It stays in its own `PhoneExplorer cache` folder, removes the least recently used files when full, and deletes anything it doesn't recognise there when the app starts.
 - Two looks: **Jarvis** (copper and gold) and **Pastel Girl** (soft pinks and creams). Switch with the theme button at the bottom right; the choice is remembered.
 - Picks the phone up automatically when it is plugged in; F5 refreshes. With more than one phone plugged in, click the DEVICE panel to switch between them. All phones copy to the same folder.
 
@@ -41,7 +52,7 @@ The app checks for a new version each time it starts. When there is one, it asks
 - Every file is its own item.
 - Treat deleting from the PC as permanent: it is not expected to go to the phone's Recycle bin. Copies already backed up to Google Photos stay there.
 
-Settings are stored in `%APPDATA%\PhoneExplorer\settings.json`. The first run moves them over from `%APPDATA%\iPhoneExplorer`.
+Settings are stored in `%APPDATA%\PhoneExplorer\settings.json`. The first run moves them over from `%APPDATA%\iPhoneExplorer`. The cache is in `%LOCALAPPDATA%\PhoneExplorer\PhoneExplorer cache` unless you change it in Settings.
 
 ## Build
 

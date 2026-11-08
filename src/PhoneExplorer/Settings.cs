@@ -16,6 +16,14 @@ public sealed class Settings
     public bool ShowImages { get; set; } = true;
     public bool ShowOther { get; set; } = false;
     public SortOrder Sort { get; set; } = SortOrder.Date;
+    /// <summary>Where the "PhoneExplorer cache" folder goes; empty means AppCache.DefaultLocation.</summary>
+    public string CacheLocation { get; set; } = "";
+    public int CacheLimitGb { get; set; } = 20;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long CacheLimitBytes => Math.Clamp(CacheLimitGb, 1, 10_000) * (1L << 30);
+    /// <summary>PC folders the duplicate check compares the phone with; null until first used (then the copy destination).</summary>
+    public List<string>? DuplicateFolders { get; set; }
+    public bool DuplicateExact { get; set; } = false;
     /// <summary>A ThemeDef.Id; unknown ids fall back to the first theme.</summary>
     public string ThemeName { get; set; } = "JarvisApps";
 

@@ -9,6 +9,8 @@ public sealed class MainForm : Form
     readonly record struct Period(int Year, int Month)
     {
         public static readonly Period New = new(-1, 0);
+        /// <summary>Items found in PC folders by the duplicate check.</summary>
+        public static readonly Period OnPc = new(-2, 0);
     }
 
     const int ThumbCacheLimit = 1500;
@@ -16,7 +18,8 @@ public sealed class MainForm : Form
 
     // Loads first: the theme must be in place before any control below is created.
     readonly Settings settings = LoadSettings();
-    readonly PhoneWorker worker = new();
+    readonly AppCache cache;
+    readonly PhoneWorker worker;
 
     readonly ToolStrip tools = new() { GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(Theme.Space3, Theme.Space1, Theme.Space3, Theme.Space1), Renderer = new HudRenderer() };
     readonly ToolStripButton refreshButton = HudRenderer.Style(new ToolStripButton("Refresh") { ToolTipText = "Read the phone again (F5)" }, ItemRole.Ghost);
@@ -44,6 +47,7 @@ public sealed class MainForm : Form
         (1L << 20, "1 – 10 MB"),
         (0, "Under 1 MB"),
     };
+    readonly ToolStripButton findButton = HudRenderer.Style(new ToolStripButton("Find on PC") { ToolTipText = "Find items that are already in folders on this PC, to delete them from the phone" }, ItemRole.Ghost);
     readonly ToolStripButton copySelectedButton = HudRenderer.Style(new ToolStripButton("Copy selected") { ToolTipText = "Copy the selected items to this PC" }, ItemRole.Primary);
     readonly ToolStripButton moveButton = HudRenderer.Style(new ToolStripButton("Move to PC") { ToolTipText = "Cut: copy the selected items to this PC, then remove them from the phone (Ctrl+X)" }, ItemRole.Secondary);
     readonly ToolStripButton deleteButton =HudRenderer.Style(new ToolStripButton("Delete") { ToolTipText = "Delete the selected items from the phone (Del). Asks first." }, ItemRole.Danger);
@@ -63,6 +67,7 @@ public sealed class MainForm : Form
     readonly HudProgressItem progress = new() { Visible = false };
     readonly ToolStripButton cancelButton = HudRenderer.Style(new ToolStripButton("Cancel") { Visible = false }, ItemRole.Ghost);
     readonly HudReadoutItem readout = new();
+    readonly ToolStripButton settingsButton = HudRenderer.Style(new ToolStripButton("Settings") { ToolTipText = "Cache location and size" }, ItemRole.Ghost);
     readonly ToolStripDropDownButton themeButton = HudRenderer.Style(new ToolStripDropDownButton("Theme") { ToolTipText = "Change how Phone Explorer looks" }, ItemRole.Ghost);
 
     readonly System.Windows.Forms.Timer deviceTimer = new() { Interval = 1500 };
@@ -80,12 +85,17 @@ public sealed class MainForm : Form
     string? selectedId;
     SeenStore? seen;
     string? seenDevice;
+    /// <summary>The last duplicate check, and the phone it was for.</summary>
+    DupResult? dups;
+    string? dupsDevice;
     bool scanning, busy, pendingRescan;
     /// <summary>A newer release waiting to be offered once the current copy, move or delete finishes.</summary>
     Updater.Release? pendingUpdate;
 
     public MainForm()
     {
+        cache = new AppCache(settings.CacheLocation, settings.CacheLimitBytes);
+        worker = new PhoneWorker { Cache = cache };
         Text = $"Phone Explorer {Updater.Current.ToString(3)}";
         AutoScaleMode = AutoScaleMode.Dpi;
         Size = new Size(1280, 820);
@@ -107,7 +117,8 @@ public sealed class MainForm : Form
             e.Graphics.DrawLine(pen, r.X + r.Width / 2, r.Y, r.X + r.Width / 2, r.Bottom);
         };
         split.Panel2.Controls.Add(grid);
-        status.Items.AddRange(new ToolStripItem[] { statusLabel, progress, cancelButton, readout, themeButton });
+        status.Items.AddRange(new ToolStripItem[] { statusLabel, progress, cancelButton, readout, settingsButton, themeButton });
+        settingsButton.Click += (_, _) => ShowSettings();
         Controls.Add(split);
         Controls.Add(tools);
         Controls.Add(status);
@@ -120,6 +131,7 @@ public sealed class MainForm : Form
         grid.DeleteRequested += () => DeleteEntries(grid.SelectedEntries);
         grid.ContextMenuStrip = gridMenu;
         grid.IsNew = IsNew;
+        grid.Details = DuplicateDetails;
         worker.ThumbnailReady += (id, bmp) => UI(() => ThumbArrived(id, bmp));
 
         cancelButton.Click += (_, _) => { worker.CancelRequested = true; cancelButton.Enabled = false; statusLabel.Text = "Cancelling…"; };
@@ -202,6 +214,7 @@ public sealed class MainForm : Form
         searchHost = new ToolStripControlHost(searchBox) { AutoSize = false, Width = searchBox.Width, Margin = new Padding(0, 3, Theme.Space2, 3) };
 
         refreshButton.Click += (_, _) => StartScan();
+        findButton.Click += (_, _) => FindDuplicates();
         copySelectedButton.Click += (_, _) => CopyEntries(grid.SelectedEntries);
         deleteButton.Click += (_, _) => DeleteEntries(grid.SelectedEntries);
         moveButton.Click += (_, _) => MoveEntries(grid.SelectedEntries);
@@ -213,6 +226,7 @@ public sealed class MainForm : Form
             HudRenderer.Style(new ToolStripLabel("Show"), ItemRole.Label), photosButton, videosButton, imagesButton, otherButton, new ToolStripSeparator(),
             HudRenderer.Style(new ToolStripLabel("Find"), ItemRole.Label), searchHost, new ToolStripSeparator(),
             HudRenderer.Style(new ToolStripLabel("Sort"), ItemRole.Label), sortDateButton, sortSizeButton, new ToolStripSeparator(),
+            findButton,
             HudRenderer.Style(new ToolStripLabel("Size"), ItemRole.Label), sizeButtons[0], sizeButtons[1], sizeButtons[2],
             copySelectedButton, moveButton, deleteButton,
         });
@@ -239,8 +253,12 @@ public sealed class MainForm : Form
             g.DrawLine(pen, x, label.Height - 1, label.Width - x, label.Height - 1);
         };
         tree.AfterSelect += (_, _) => ApplyView(keepScroll: false);
-        tree.NodeMouseHover += (_, e) => treeTip.SetToolTip(tree, e.Node?.Tag is TreeRow { Key: Period p } && p == Period.New
-            ? "Items that appeared on the phone since the app last saw it,\nincluding photos you have just unhidden.\nRight-click to mark everything as seen."
+        tree.NodeMouseHover += (_, e) => treeTip.SetToolTip(tree, e.Node?.Tag is TreeRow { Key: Period p }
+            ? p == Period.New
+                ? "Items that appeared on the phone since the app last saw it,\nincluding photos you have just unhidden.\nRight-click to mark everything as seen."
+                : p == Period.OnPc
+                    ? "Items the last Find on PC found in folders on this PC.\nRight-click to select all duplicates, then press Delete to free up space."
+                    : null
             : null);
         split.Panel1.Controls.Add(tree);
         split.Panel1.Controls.Add(label);
@@ -256,11 +274,12 @@ public sealed class MainForm : Form
         var move = Item("Move to PC", () => MoveEntries(grid.SelectedEntries));
         move.ShortcutKeyDisplayString = "Ctrl+X";
         var markSeen = Item("Mark everything as seen", MarkAllSeen);
+        var selectDups = Item("Select all duplicates", SelectAllDuplicates);
         var delete = HudRenderer.Style(new ToolStripMenuItem("Delete from phone", null, (_, _) => DeleteEntries(grid.SelectedEntries)) { ShortcutKeyDisplayString = "Del" }, ItemRole.Danger);
         gridMenu.Items.AddRange(new ToolStripItem[]
         {
             open, copy, move, Item("Copy all shown", () => CopyEntries(grid.Entries.ToList())), new ToolStripSeparator(),
-            Item("Select all shown", grid.SelectAll), Item("Clear selection", grid.ClearSelection), new ToolStripSeparator(),
+            Item("Select all shown", grid.SelectAll), selectDups, Item("Clear selection", grid.ClearSelection), new ToolStripSeparator(),
             markSeen, new ToolStripSeparator(),
             delete,
         });
@@ -270,11 +289,19 @@ public sealed class MainForm : Form
             open.Enabled = copy.Enabled = any && !busy;
             delete.Enabled = move.Enabled = any && !busy && !scanning;
             markSeen.Enabled = library.Any(IsNew);
+            selectDups.Visible = dups != null;
+            selectDups.Enabled = library.Any(SafeDuplicate);
         };
 
         var treeMark = Item("Mark everything as seen", MarkAllSeen);
-        treeMenu.Items.Add(treeMark);
-        treeMenu.Opening += (_, _) => treeMark.Enabled = library.Any(IsNew);
+        var treeDups = Item("Select all duplicates", SelectAllDuplicates);
+        treeMenu.Items.AddRange(new ToolStripItem[] { treeMark, treeDups });
+        treeMenu.Opening += (_, _) =>
+        {
+            treeMark.Enabled = library.Any(IsNew);
+            treeDups.Visible = dups != null;
+            treeDups.Enabled = library.Any(SafeDuplicate);
+        };
         tree.ContextMenuStrip = treeMenu;
     }
 
@@ -460,6 +487,8 @@ public sealed class MainForm : Form
         else
         {
             if (seen == null || seenDevice != found.Name) { seen = new SeenStore(found.Name); seenDevice = found.Name; }
+            // Duplicate results are keyed by folder, name and size, so they outlive a rescan of the same phone.
+            if (dupsDevice != found.Name) dups = null;
             seen.Remember(files);
             grid.EmptyText = Theme.Say("Nothing on the phone\nPhotos and videos on the phone appear here.", "Nothing here yet\nPhotos and videos on the phone will show up here ♥");
             Rebuild(keepScroll: true);
@@ -509,6 +538,7 @@ public sealed class MainForm : Form
 
     bool InPeriod(MediaEntry e, Period p) =>
         p == Period.New ? IsNew(e) :
+        p == Period.OnPc ? dups?.For(e) != null :
         p.Year == 0 || (e.Date.Year == p.Year && (p.Month == 0 || e.Date.Month == p.Month));
 
     Period SelectedPeriod => tree.SelectedNode?.Tag is TreeRow { Key: Period p } ? p : new Period(0, 0);
@@ -532,6 +562,11 @@ public sealed class MainForm : Form
         int newCount = shown.Count(IsNew);
         var newNode = Add(tree.Nodes, Period.New, "New since last time", newCount, info: newCount > 0);
         if (current == Period.New) select = newNode;
+        if (dups != null)
+        {
+            var dupNode = Add(tree.Nodes, Period.OnPc, "On PC already", shown.Count(e => dups.For(e) != null));
+            if (current == Period.OnPc) select = dupNode;
+        }
         foreach (var year in shown.GroupBy(e => e.Date.Year).OrderByDescending(g => g.Key))
         {
             var yearNode = Add(tree.Nodes, new Period(year.Key, 0), year.Key == 1 ? "Unknown date" : year.Key.ToString(), year.Count());
@@ -556,14 +591,16 @@ public sealed class MainForm : Form
         var filtered = library
             .Where(e => KindShown(e.Kind) && InPeriod(e, period) &&
                         (search.Length == 0 || e.AllFiles.Any(f => f.Name.Contains(search, StringComparison.OrdinalIgnoreCase))));
-        var (list, groups) = Arrange(filtered);
-        grid.Caption = settings.Sort == SortOrder.Size ? e => ThumbGrid.FormatSize(e.TotalSize) : null;
+        var (list, groups) = period == Period.OnPc && dups != null ? ArrangeDuplicates(filtered, dups) : Arrange(filtered);
+        grid.Caption = settings.Sort == SortOrder.Size || period == Period.OnPc ? e => ThumbGrid.FormatSize(e.TotalSize) : null;
         if (device != null && !scanning && library.Count > 0)
             grid.EmptyText = period == Period.New
                 ? device.IsApple
                     ? "Nothing new\nPhotos you take or unhide on the phone appear here after a Refresh (F5). " +
                       "Hidden photos are never shared over USB, so unhide them on the phone first."
                     : "Nothing new\nPhotos you take on the phone appear here after a Refresh (F5)."
+                : period == Period.OnPc
+                ? "Nothing on this PC\nNone of the items shown were found in the folders you checked. Use Find on PC to check other folders."
                 : "Nothing matches\nNo items match the current filters. Turn on more types under Show, or clear Find.";
         grid.SetEntries(list, groups, keepScroll);
         UpdateSelectionInfo();
@@ -604,6 +641,162 @@ public sealed class MainForm : Form
         return (byDate, groups);
     }
 
+    // ---- duplicates on this PC ----------------------------------------------------------
+
+    static readonly (DupTier? Tier, string Title)[] DupGroups =
+    {
+        (DupTier.Exact, "Exact match"),
+        (DupTier.SameFile, "Same file on PC"),
+        (DupTier.SamePhoto, "Same photo, different file"),
+        (null, "Partly on PC"),
+    };
+
+    /// <summary>The duplicates view: one group per match tier, largest first in each.</summary>
+    (List<MediaEntry> List, List<EntryGroup> Groups) ArrangeDuplicates(IEnumerable<MediaEntry> items, DupResult result)
+    {
+        var matched = items.Select(e => (Entry: e, Match: result.For(e)!)).Where(x => x.Match != null).ToList();
+        var list = new List<MediaEntry>();
+        var groups = new List<EntryGroup>();
+        foreach (var (tier, title) in DupGroups)
+        {
+            var part = matched.Where(x => x.Match.Tier == tier).Select(x => x.Entry).OrderByDescending(e => e.TotalSize).ThenByDescending(e => e.Date).ToList();
+            if (part.Count == 0) continue;
+            groups.Add(new EntryGroup(title, list.Count, part.Count, part.Sum(e => e.TotalSize)));
+            list.AddRange(part);
+        }
+        return (list, groups);
+    }
+
+    /// <summary>Safe to delete from the phone: every file of the item is the same file (or exactly the same) on this PC.</summary>
+    bool SafeDuplicate(MediaEntry e) => dups?.For(e) is { Tier: DupTier.Exact or DupTier.SameFile };
+
+    /// <summary>Shows the duplicates view with every safe duplicate selected. Converted copies and partial matches are left for the user to pick.</summary>
+    void SelectAllDuplicates()
+    {
+        if (dups == null) return;
+        var node = tree.Nodes.Cast<TreeNode>().FirstOrDefault(n => n.Tag is TreeRow { Key: Period p } && p == Period.OnPc);
+        if (node != null && tree.SelectedNode != node) tree.SelectedNode = node;
+        grid.Select(grid.Entries.Where(SafeDuplicate));
+        grid.Focus();
+    }
+
+    string? DuplicateDetails(MediaEntry e)
+    {
+        if (dups?.For(e) is not { } m) return null;
+        var lines = new List<string> { $"On this PC: {m.Primary.PcPath}", $"Match: {m.Primary.Reason}" };
+        if (m.Missing.Count > 0) lines.Add($"Not on this PC: {string.Join(", ", m.Missing)}");
+        return string.Join("\n", lines);
+    }
+
+    async void FindDuplicates()
+    {
+        if (busy || scanning || device == null || files.Count == 0) return;
+        List<string> folders;
+        bool exact;
+        using (var dialog = new DuplicatesDialog(settings, device.Name))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            folders = dialog.Folders.Where(Directory.Exists).ToList();
+            exact = dialog.ExactMatch;
+        }
+
+        var phoneName = device.Name;
+        var snapshot = files.ToList();
+        BeginWork(1);
+        progress.SetIndeterminate();
+        statusLabel.Text = "Reading PC folders…";
+        var finder = new DuplicateFinder(cache,
+            f =>
+            {
+                var tcs = new TaskCompletionSource<(string?, string?)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                worker.Fetch(f, (path, error) => tcs.TrySetResult((path, error)));
+                return tcs.Task;
+            },
+            () => worker.CancelRequested,
+            (text, i, total) => UI(() =>
+            {
+                if (total > 0) progress.SetProgress(i, total);
+                statusLabel.Text = text;
+            }));
+        DupResult result;
+        try { result = await finder.Run(snapshot, folders, exact); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        {
+            EndWork();
+            HudDialog.Show(this, "Couldn't check for duplicates", ex.Message.Trim(), CloseButton);
+            return;
+        }
+        bool cancelled = worker.CancelRequested;
+        EndWork();
+        if (IsDisposed) return;
+        if (cancelled)
+        {
+            statusLabel.Text = "Find on PC cancelled";
+            return;
+        }
+
+        dups = result;
+        dupsDevice = phoneName;
+        RebuildTree();
+        var node = tree.Nodes.Cast<TreeNode>().FirstOrDefault(n => n.Tag is TreeRow { Key: Period p } && p == Period.OnPc);
+        if (node != null) tree.SelectedNode = node;
+        ApplyView(keepScroll: false);
+
+        // Count what the view shows (the Show toggles and Find still apply), so the numbers match what gets selected.
+        var all = grid.Entries.ToList();
+        var safe = all.Where(SafeDuplicate).ToList();
+        if (all.Count == 0)
+        {
+            HudDialog.Show(this, "Nothing found on this PC",
+                $"None of the items shown were found in the folders you checked." +
+                (library.Any(e => dups.For(e) != null) ? " Some hidden by the Show buttons or Find were; turn those on to see them." : ""), CloseButton);
+            return;
+        }
+        int other = all.Count - safe.Count;
+        var msg = $"{Plural(all.Count, "item")} on {phoneName} {(all.Count == 1 ? "is" : "are")} already on this PC." +
+                  (safe.Count > 0 ? $"\n\n{Plural(safe.Count, "item")} ({ThumbGrid.FormatSize(safe.Sum(e => e.TotalSize))}) {(safe.Count == 1 ? "is" : "are")} the same file{(exact ? ", checked exactly" : "")}, so deleting {(safe.Count == 1 ? "it" : "them")} from the phone frees that space and keeps the copy on this PC." : "") +
+                  (other > 0 ? $"\n\n{Plural(other, "item")} {(other == 1 ? "is a different file or is" : "are different files or are")} only partly on this PC, for example converted to JPG or missing the Live Photo clip. Check {(other == 1 ? "it" : "them")} before deleting; Select all duplicates leaves {(other == 1 ? "it" : "them")} out." : "") +
+                  (result.Uncompared > 0 ? $"\n\n{Plural(result.Uncompared, "file")} couldn't be checked exactly, so {(result.Uncompared == 1 ? "it counts" : "they count")} as the same file on name and size alone. " +
+                                           "Either the copy from the phone failed (check it's unlocked), or Windows has no decoder for the format (for HEIC, install the HEIF and HEVC extensions from the Microsoft Store). Hover over an item to see which." : "");
+        var answer = safe.Count > 0
+            ? HudDialog.Show(this, Theme.Say("Found on this PC", "Found them ♥"), msg, ("Select all duplicates", ButtonKind.Primary, DialogResult.Yes), ("Close", ButtonKind.Ghost, DialogResult.Cancel))
+            : HudDialog.Show(this, "Found on this PC", msg, CloseButton);
+        if (answer == DialogResult.Yes) SelectAllDuplicates();
+    }
+
+    /// <summary>A cache move in progress; closing the app waits for it so no half-moved folder is left behind.</summary>
+    Task? cacheMove;
+
+    async void ShowSettings()
+    {
+        if (busy || scanning) return;
+        using (var dialog = new SettingsDialog(settings, cache))
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        if (!cache.IsAt(settings.CacheLocation))
+        {
+            // Thumbnails are read from and written to the cache while browsing; stop asking for them while it moves.
+            worker.SetWantedThumbnails(new(), grid.ThumbPixels);
+            var target = AppCache.RootFor(settings.CacheLocation);
+            BeginWork(1);
+            statusLabel.Text = $"Moving the cache to {target}…";
+            int moved;
+            var task = Task.Run(() => cache.Relocate(settings.CacheLocation,
+                (i, total) => UI(() => progress.SetProgress(i, total)),
+                () => worker.CancelRequested));
+            cacheMove = task;
+            moved = await task;
+            cacheMove = null;
+            bool cancelled = worker.CancelRequested;
+            EndWork();
+            statusLabel.Text = cancelled
+                ? $"Cache move cancelled: {Plural(moved, "file")} moved, the rest dropped"
+                : $"Moved the cache to {target} ({Plural(moved, "file")})";
+        }
+        cache.SetLimit(settings.CacheLimitBytes);
+        grid.Invalidate();
+    }
+
     void UpdateSelectionInfo()
     {
         var sel = grid.SelectedEntries;
@@ -615,6 +808,8 @@ public sealed class MainForm : Form
     void UpdateButtons()
     {
         refreshButton.Enabled = !scanning && !busy;
+        findButton.Enabled = !scanning && !busy && device != null && files.Count > 0;
+        settingsButton.Enabled = !scanning && !busy;
         copySelectedButton.Enabled = !busy && grid.SelectedEntries.Count > 0;
         deleteButton.Enabled = moveButton.Enabled = !busy && !scanning && grid.SelectedEntries.Count > 0;
     }
@@ -657,7 +852,7 @@ public sealed class MainForm : Form
         if (busy) return;
         var file = entry.Display;
         statusLabel.Text = $"Opening {file.Name}…";
-        worker.CopyToTemp(file, (path, error) => UI(() =>
+        worker.Fetch(file, (path, error) => UI(() =>
         {
             statusLabel.Text = "Ready";
             if (path == null)
@@ -846,8 +1041,9 @@ public sealed class MainForm : Form
     int AlreadyCopied(List<MediaEntry> entries)
     {
         var dest = settings.Destination;
-        if (!Directory.Exists(dest)) return 0;
-        return entries.Count(e => new[]
+        bool destThere = Directory.Exists(dest);
+        // A converted copy (Same photo) isn't the original, so it doesn't count here.
+        return entries.Count(e => SafeDuplicate(e) || destThere && new[]
         {
             Path.Combine(dest, e.Date.ToString("yyyy"), e.Date.ToString("MM MMMM"), e.Primary.Name),
             Path.Combine(dest, e.Primary.Name),
@@ -859,13 +1055,18 @@ public sealed class MainForm : Form
         if (entries.Count == 0 || busy || scanning) return;
         int fileCount = entries.Sum(e => e.AllFiles.Count());
         long bytes = entries.Sum(e => e.TotalSize);
+        // A PC copy found by Find on PC may have been moved or changed since: check again now.
+        int stale = dups?.Revalidate(entries.SelectMany(e => e.AllFiles)) ?? 0;
+        if (stale > 0) { RebuildTree(); ApplyView(keepScroll: true); }
         int copied = AlreadyCopied(entries);
         var what = entries.Count == 1 ? entries[0].Primary.Name : $"{entries.Count:N0} items";
+        var where = dups == null ? $"your copy folder ({settings.Destination})" : $"your copy folder ({settings.Destination}) or the folders checked with Find on PC";
         var backup = copied == entries.Count
-            ? $"All of them are already in your copy folder ({settings.Destination})."
+            ? $"All of them are already on this PC, in {where}."
             : copied == 0
-                ? $"None of them are in your copy folder ({settings.Destination}). Copy them first, or use Move to PC, if you want to keep them."
-                : $"Only {copied:N0} of {entries.Count:N0} are in your copy folder ({settings.Destination}). Copy the rest first if you want to keep them.";
+                ? $"None of them are in {where}. Copy them first, or use Move to PC, if you want to keep them."
+                : $"Only {copied:N0} of {entries.Count:N0} are in {where}. Copy the rest first if you want to keep them.";
+        if (stale > 0) backup += $"\n\n{Plural(stale, "file")} found earlier by Find on PC {(stale == 1 ? "has" : "have")} since gone or changed on this PC, so {(stale == 1 ? "it no longer counts" : "they no longer count")} as copied.";
         bool apple = device?.IsApple ?? true;
         var message = apple
             ? $"{what} ({Plural(fileCount, "file")}, {ThumbGrid.FormatSize(bytes)}) will be deleted from {device?.Name ?? "the iPhone"}, " +
@@ -901,6 +1102,13 @@ public sealed class MainForm : Form
     {
         if (deleted.Count == 0) return;
         var gone = deleted.ToHashSet();
+        // Their cached copies and thumbnails will never be wanted again.
+        foreach (var f in files.Where(f => gone.Contains(f.Id)))
+        {
+            var key = PhoneWorker.FileKey(device?.Name ?? "", f);
+            cache.Remove("file|" + key);
+            cache.RemovePrefix($"thumb|{key}|");
+        }
         files = files.Where(f => !gone.Contains(f.Id)).ToList();
         foreach (var id in gone)
             if (thumbs.Remove(id, out var b)) { thumbOrder.Remove(id); b.Dispose(); }
@@ -918,6 +1126,9 @@ public sealed class MainForm : Form
         }
         worker.CancelRequested = true;
         settings.Save();
+        // A cancelled cache move finishes quickly (it only deletes what it didn't move); let it, so nothing is orphaned.
+        cacheMove?.Wait();
         worker.Dispose();
+        cache.Dispose();
     }
 }

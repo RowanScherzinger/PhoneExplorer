@@ -34,6 +34,8 @@ public sealed class ThumbGrid : ScrollableControl
     public Func<MediaEntry, bool>? IsNew;
     /// <summary>The text under a tile; null shows the file name.</summary>
     public Func<MediaEntry, string>? Caption;
+    /// <summary>Extra tooltip lines for a tile, or null.</summary>
+    public Func<MediaEntry, string?>? Details;
     public event Action<List<int>>? ThumbnailsNeeded;
     public event EventHandler? SelectionChanged;
     public event Action<MediaEntry>? EntryActivated;
@@ -93,6 +95,16 @@ public sealed class ThumbGrid : ScrollableControl
     public void SelectAll()
     {
         foreach (var e in entries) selected.Add(e.Key);
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Selects exactly these entries (those not shown are ignored).</summary>
+    public void Select(IEnumerable<MediaEntry> list)
+    {
+        selected.Clear();
+        var shown = entries.Select(e => e.Key).ToHashSet();
+        foreach (var e in list) if (shown.Contains(e.Key)) selected.Add(e.Key);
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -507,7 +519,7 @@ public sealed class ThumbGrid : ScrollableControl
         hoverStart = DateTime.UtcNow;
         if (i >= 0 && !Theme.ReducedMotion) clock.Start();
         Cursor = header >= 0 ? Cursors.Hand : Cursors.Default;
-        tip.SetToolTip(this, i >= 0 ? Describe(entries[i]) : null);
+        tip.SetToolTip(this, i >= 0 ? Describe(entries[i]) + (Details?.Invoke(entries[i]) is { } more ? "\n" + more : "") : null);
         Invalidate();
     }
 
