@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using PhoneExplorer.Hud;
+using PhoneExplorer.Hud.Themes;
 
 namespace PhoneExplorer;
 
@@ -15,6 +16,8 @@ public sealed class MainForm : Form
 
     const int ThumbCacheLimit = 1500;
     const int WM_DEVICECHANGE = 0x0219;
+    const int WM_SETTINGCHANGE = 0x001A;
+    const int WM_THEMECHANGED = 0x031A;
 
     // Loads first: the theme must be in place before any control below is created.
     readonly Settings settings = LoadSettings();
@@ -346,7 +349,7 @@ public sealed class MainForm : Form
         themeButton.Text = Theme.Current.DisplayName;
         HudRenderer.Style(themeButton, ItemRole.Ghost);
         foreach (ToolStripMenuItem item in themeButton.DropDownItems)
-            item.Checked = item.Tag == Theme.Current;
+            item.Checked = item.Tag is ThemeDef def && def.Id == Theme.Current.Id;
         devicePanel.ApplyTheme();
         tree.ApplyTheme();
         grid.ApplyTheme();
@@ -386,9 +389,29 @@ public sealed class MainForm : Form
 
     protected override void WndProc(ref Message m)
     {
-        // Something was plugged in or out: check for the phone shortly after things settle.
-        if (m.Msg == WM_DEVICECHANGE) { deviceTimer.Stop(); deviceTimer.Start(); }
+        if (m.Msg == WM_DEVICECHANGE)
+        {
+            deviceTimer.Stop();
+            deviceTimer.Start();
+        }
+    
         base.WndProc(ref m);
+    
+        if (m.Msg == WM_SETTINGCHANGE || m.Msg == WM_THEMECHANGED)
+        {
+            if (settings.ThemeName == "Windows")
+            {
+                if (Theme.RefreshSystemTheme())
+                {
+                    if (IsHandleCreated && !IsDisposed)
+                    {
+                        SuspendLayout();
+                        ApplyTheme();
+                        ResumeLayout(true);
+                    }
+                }
+            }
+        }
     }
 
     void CheckDevice()
