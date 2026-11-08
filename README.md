@@ -20,9 +20,10 @@ The app checks for a new version each time it starts. When there is one, it asks
 - Filter by Photos / Videos / Screenshots & images, or by file name (Ctrl+F).
 - **New since last time** lists items that appeared on the phone since the app last saw it, and marks them with a NEW badge. Right-click → "Mark everything as seen" clears the list.
 - Select with click, Ctrl/Shift+click, Ctrl+A, or click a month heading to select the whole month.
-- **COPY SELECTED** copies into `Year\MM Month` folders (optional) and skips files already copied. Ctrl+C copies the selection. Double-click opens a photo.
-- **MOVE TO PC** (Ctrl+X) is cut and paste: it copies each item with all its files, checks every copy on the PC, and only then deletes it from the phone. If any file of an item fails, that item stays on the phone.
-- **DELETE** (Del) removes items from the phone after a confirmation that shows how many are already on the PC. It can't be undone from the PC.
+- **COPY SELECTED** copies into `Year\MM Month` folders (optional) and skips files already copied. Every copy is checked to be complete, and the copy stops at the first file that didn't come off the phone correctly. Ctrl+C copies the selection. Double-click opens a photo.
+- **MOVE TO PC** (Ctrl+X) is cut and paste: it copies each item with all its files, reads every copy back from the phone and compares it byte for byte, and only then deletes it from the phone. If any file of an item doesn't match, that item stays on the phone.
+- **DELETE** (Del) removes items from the phone after a confirmation that shows how many are already on the PC. Those copies are read back from the phone and compared byte for byte first; when only some match, you can delete just those. It can't be undone from the PC.
+- If a file doesn't come off the phone correctly, copies stop until you unplug the phone, plug it back in and press Refresh: after a failed transfer an iPhone can keep sending the wrong data.
 - **Sort: Largest** puts the biggest items first, grouped by size (1 GB and over, 100 MB to 1 GB, and so on), to find what takes up space. Click a size heading to select the whole group.
 - **FIND ON PC** checks folders on the PC for items that are already there, and lists them under "On PC already":
   - **Exact match**: the same bytes or pixels. Exact mode only.
@@ -61,6 +62,12 @@ dotnet publish src\PhoneExplorer -c Release -o publish
 ```
 
 Then copy `publish\PhoneExplorer.exe` to this folder. That build is small but needs the .NET 10 Desktop Runtime.
+
+Run the tests before every release:
+
+```
+dotnet test tests\PhoneExplorer.Tests
+```
 
 Release builds include the runtime, so they run on any Windows PC. To release, bump `<Version>` in the csproj, build as below, and attach the exe to a GitHub release tagged `vX.Y.Z` with the asset named exactly `PhoneExplorer.exe`. Running copies update to the newest non-draft, non-prerelease release.
 

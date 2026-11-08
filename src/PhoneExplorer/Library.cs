@@ -23,6 +23,9 @@ public sealed record MediaFile(int Id, string Name, string Folder, long Size, Da
 /// </summary>
 public sealed class MediaEntry
 {
+    /// <summary>How messages name a file: the item's name, plus the companion in words. "IMG_1234.HEIC (edit data)".</summary>
+    public string Describe(MediaFile f) => PartName(f) is { } part ? $"{Primary.Name} ({part})" : Primary.Name;
+
     public required MediaFile Primary { get; init; }
     public List<(MediaFile File, FileRole Role)> Extras { get; } = new();
 
@@ -36,6 +39,18 @@ public sealed class MediaEntry
     public MediaFile Display => Extras.FirstOrDefault(x => x.Role == FileRole.Edited).File ?? Primary;
 
     public IEnumerable<MediaFile> AllFiles => Extras.Select(x => x.File).Prepend(Primary);
+
+    /// <summary>
+    /// How messages refer to one of this item's companion files, so the user only ever sees the item:
+    /// "edit data" rather than IMG_1234.AAE. Null for the item's own file.
+    /// </summary>
+    public string? PartName(MediaFile f) => f.Id == Primary.Id ? null : Extras.FirstOrDefault(x => x.File.Id == f.Id).Role switch
+    {
+        FileRole.Edited => "edited version",
+        FileRole.Live => "Live Photo clip",
+        FileRole.EditedLive => "edited Live Photo clip",
+        _ => "edit data",
+    };
 
     /// <summary>Bytes of every file in the item: the space deleting it frees on the phone.</summary>
     public long TotalSize => AllFiles.Sum(f => Math.Max(0, f.Size));

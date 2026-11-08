@@ -3,10 +3,28 @@ using System.Runtime.InteropServices;
 
 namespace PhoneExplorer;
 
-public sealed record CopyRequest(int Id, string Name, string RelativeDir, long Size);
+/// <summary>One file to copy. Item is the name the user knows it by; Label adds which companion it is.</summary>
+public sealed record CopyRequest(int Id, string Name, string RelativeDir, long Size, string Item, string Label);
 
-/// <summary>Verified: ids whose file is now on the PC at the same size (copied or already there).</summary>
-public sealed record CopyResult(int Copied, int Skipped, long Bytes, List<string> Failed, bool Cancelled, HashSet<int> Verified);
+/// <summary>
+/// Copied and Skipped (already on the PC) hold ids whose file is now on the PC, whole and at the
+/// phone's size. Matched: ids whose PC file was also read back from the phone and matched byte for
+/// byte (a Move only). NotTried: files left alone because the copy stopped early. Stopped: the phone
+/// sent a file wrongly, so the copy stopped and more copies are refused until the phone is reconnected.
+/// </summary>
+public sealed record CopyResult(HashSet<int> Copied, HashSet<int> Skipped, HashSet<int> Matched, long Bytes, List<string> Failed, bool Cancelled, int NotTried, bool Stopped)
+{
+    public bool Verified(int id) => Copied.Contains(id) || Skipped.Contains(id);
+
+    /// <summary>Whether the phone's file may be deleted: its PC copy matched the phone's byte for byte.</summary>
+    public bool SafeToDelete(int id) => Matched.Contains(id);
+
+    /// <summary>
+    /// The items a Move may delete from the phone: those whose every file (original, edits, Live Photo
+    /// clip, edit data) matched. An item is never half-deleted, so a companion that didn't keeps the whole item.
+    /// </summary>
+    public List<MediaEntry> SafeToDelete(IEnumerable<MediaEntry> entries) => entries.Where(e => e.AllFiles.All(f => SafeToDelete(f.Id))).ToList();
+}
 
 public sealed record DeleteResult(List<int> Deleted, List<string> Failed, bool Cancelled);
 
@@ -32,6 +50,8 @@ public sealed class PhoneWorker : IDisposable
     int wantedSize;
     int nextId = 1;
     volatile bool stopping;
+    /// <summary>The copy rules, and whether the phone is in trouble (refusing copies and fetches until the next scan).</summary>
+    readonly CopyEngine engine = new();
 
     public volatile bool CancelRequested;
 
@@ -161,6 +181,7 @@ public sealed class PhoneWorker : IDisposable
     {
         items.Clear();
         keys.Clear();
+        engine.Trouble = null;
         lock (gate) wantedThumbs = new();
         IShellItem deviceItem;
         PhoneDevice device;
@@ -269,71 +290,59 @@ public sealed class PhoneWorker : IDisposable
         return file;
     }
 
-    public void Copy(List<CopyRequest> requests, string destination, Action<int, int, string> progress, Action<CopyResult> done) => Post(() =>
+    /// <summary>
+    /// Copies files to the PC (see CopyEngine.Run). readBack (a Move): also compare each PC file with the
+    /// phone's, byte for byte, so the result says which phone files are safe to delete.
+    /// </summary>
+    public void Copy(List<CopyRequest> requests, string destination, bool readBack, Action<int, int, string> progress, Action<CopyResult> done) => Post(() =>
+        done(engine.Run(new Files(items), requests, destination, readBack, () => CancelRequested, progress)));
+
+    /// <summary>
+    /// Before a Delete: which of these phone files have a PC copy that reads back the same as the phone's
+    /// (see CopyEngine.Confirm). done(confirmed ids, stopped because the phone sent data wrongly).
+    /// </summary>
+    public void Confirm(List<(int Id, string Path, string Label)> claims, Action<int, int, string> progress, Action<HashSet<int>, bool> done) => Post(() =>
     {
-        int copied = 0, skipped = 0;
-        long bytes = 0;
-        var failed = new List<string>();
-        var verified = new HashSet<int>();
-        for (int i = 0; i < requests.Count; i++)
-        {
-            if (CancelRequested) { done(new CopyResult(copied, skipped, bytes, failed, true, verified)); return; }
-            var r = requests[i];
-            progress(i, requests.Count, r.Name);
-            try
-            {
-                var dir = Path.Combine(destination, r.RelativeDir);
-                var target = Path.Combine(dir, r.Name);
-                if (File.Exists(target) && new FileInfo(target).Length == r.Size) { skipped++; verified.Add(r.Id); continue; }
-                string? newName = null;
-                if (File.Exists(target))
-                {
-                    var stem = Path.GetFileNameWithoutExtension(r.Name);
-                    var ext = Path.GetExtension(r.Name);
-                    for (int n = 2; File.Exists(Path.Combine(dir, newName = $"{stem} ({n}){ext}")); n++) { }
-                }
-                if (!items.TryGetValue(r.Id, out var item)) throw new IOException("the phone was rescanned or disconnected");
-                Shell.Copy(item, dir, newName);
-                var written = Path.Combine(dir, newName ?? r.Name);
-                if (!File.Exists(written) || new FileInfo(written).Length != r.Size)
-                    throw new IOException("the copy on this PC doesn't match the phone's file size");
-                copied++;
-                bytes += r.Size;
-                verified.Add(r.Id);
-            }
-            catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException)
-            {
-                failed.Add($"{r.Name}: {ex.Message.Trim()}");
-            }
-        }
-        done(new CopyResult(copied, skipped, bytes, failed, false, verified));
+        var (confirmed, stopped) = engine.Confirm(new Files(items), claims, () => CancelRequested, progress);
+        done(confirmed, stopped);
     });
+
+    /// <summary>The phone's files, by id, for the copy engine. Used only on the worker thread.</summary>
+    sealed class Files(Dictionary<int, IShellItem> items) : IPhoneFiles
+    {
+        IShellItem Item(int id) => items.TryGetValue(id, out var item) ? item : throw new IOException("the phone was rescanned or disconnected");
+        public string? CopyTo(int id, string dir, string? newName) => Shell.Copy(Item(id), dir, newName);
+        public Stream OpenRead(int id) => Shell.OpenRead(Item(id));
+    }
 
     /// <summary>
     /// Deletes files from the phone, one at a time. Each group is one item's files (original, edits,
     /// Live Photo clip, sidecar): if any file of a group can't be deleted, the rest of that group is
     /// left alone so an item is never half-deleted. Not undoable.
     /// </summary>
-    public void Delete(List<List<MediaFile>> groups, Action<int, int, string> progress, Action<DeleteResult> done) => Post(() =>
+    public void Delete(List<MediaEntry> entries, Action<int, int, string> progress, Action<DeleteResult> done) => Post(() =>
     {
         var deleted = new List<int>();
         var failed = new List<string>();
-        int total = groups.Sum(g => g.Count), n = 0;
-        foreach (var group in groups)
+        int total = entries.Sum(e => e.AllFiles.Count()), n = 0;
+        foreach (var entry in entries)
         {
             if (CancelRequested) { done(new DeleteResult(deleted, failed, true)); return; }
+            var group = entry.AllFiles.ToList();
             // Check the whole group first, so a refusal doesn't leave an item half-deleted.
             var refused = group.FirstOrDefault(f => !items.TryGetValue(f.Id, out var it) || !SafeCanDelete(it));
             if (refused != null)
             {
-                failed.Add($"{group[0].Name}: the phone doesn't allow deleting {refused.Name}");
+                failed.Add(entry.PartName(refused) is { } part
+                    ? $"{entry.Primary.Name}: the phone doesn't allow deleting its {part}"
+                    : $"{entry.Primary.Name}: the phone doesn't allow deleting it");
                 n += group.Count;
                 continue;
             }
             // Companions first, the original last: if something fails part-way the original survives.
             foreach (var f in group.Skip(1).Append(group[0]))
             {
-                progress(n++, total, f.Name);
+                progress(n++, total, entry.Primary.Name);
                 try
                 {
                     Shell.Delete(items[f.Id]);
@@ -342,7 +351,7 @@ public sealed class PhoneWorker : IDisposable
                 }
                 catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException)
                 {
-                    failed.Add($"{f.Name}: {ex.Message.Trim()}");
+                    failed.Add($"{entry.Describe(f)}: {ex.Message.Trim()}");
                     break;
                 }
             }
@@ -367,15 +376,30 @@ public sealed class PhoneWorker : IDisposable
             if (!items.TryGetValue(file.Id, out var item) || !keys.TryGetValue(file.Id, out var key))
                 throw new IOException("the phone was rescanned or disconnected");
             key = "file|" + key;
-            if (Cache?.Get(key) is { } cached && new FileInfo(cached).Length == file.Size) { done(cached, null); return; }
+            if (Cache?.Get(key) is { } cached)
+            {
+                // Files cached before checks existed may hold another file's data: drop those.
+                if (new FileInfo(cached).Length == file.Size && FileCheck.Problem(cached) == null) { done(cached, null); return; }
+                Cache.Remove(key);
+            }
+            if (engine.Trouble is { } trouble) throw new IOException(trouble);
             var dir = Cache?.Stage() ?? throw new IOException("the cache folder can't be used; check it in Settings");
             string? path;
             try
             {
-                Shell.Copy(item, dir, null);
-                var staged = Path.Combine(dir, file.Name);
-                if (!File.Exists(staged) || new FileInfo(staged).Length != file.Size)
-                    throw new IOException("the copy doesn't match the phone's file size");
+                string staged;
+                try
+                {
+                    staged = Shell.Copy(item, dir, null) ?? Path.Combine(dir, file.Name);
+                    if (!File.Exists(staged) || new FileInfo(staged).Length != file.Size)
+                        throw new IOException("the copy doesn't match the phone's file size");
+                    if (FileCheck.Problem(staged) is { } problem) throw new IOException(problem);
+                }
+                catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException)
+                {
+                    engine.Trouble = CopyEngine.TroubleText;
+                    throw;
+                }
                 path = Cache.Commit(key, staged) ?? throw new IOException("the file is bigger than the cache allows; raise the limit in Settings");
             }
             finally

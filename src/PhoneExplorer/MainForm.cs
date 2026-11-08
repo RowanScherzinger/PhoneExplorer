@@ -980,8 +980,30 @@ public sealed class MainForm : Form
                 FileRole.EditedLive => settings.IncludeLive && settings.IncludeEdits,
                 _ => settings.IncludeSidecars,
             };
-        }).Select(f => new CopyRequest(f.Id, f.Name, dir, f.Size));
+        }).Select(f => new CopyRequest(f.Id, f.Name, dir, f.Size, e.Primary.Name, e.Describe(f)));
     }).ToList();
+
+    /// <summary>Items whose every requested file is now on the PC, whole: the user counts items, not their companion files.</summary>
+    static List<MediaEntry> Finished(List<MediaEntry> entries, List<CopyRequest> requests, CopyResult r)
+    {
+        var asked = requests.Select(q => q.Id).ToHashSet();
+        return entries.Where(e => e.AllFiles.Where(f => asked.Contains(f.Id)).All(f => r.Verified(f.Id))).ToList();
+    }
+
+    /// <summary>What went wrong in a copy, for the end of its message. notDone: items that didn't fully copy.</summary>
+    static string CopyProblems(CopyResult r, int notDone)
+    {
+        var items = $"{Plural(notDone, "item")} {(notDone == 1 ? "wasn't" : "weren't")} copied.";
+        if (r.Stopped && r.Failed.Count == 0)
+            return "\n\nNothing was copied: an earlier file didn't come off the phone correctly, and after that the phone can send the wrong data. " +
+                   "Unplug the phone, plug it back in and press Refresh, then try again.";
+        if (r.Stopped)
+            return $"\n\nThe copy stopped because a file didn't come off the phone correctly, and after that the phone can send the wrong data. {items} " +
+                   "Unplug the phone, plug it back in and press Refresh, then try again; finished items are skipped.\n" + FailureList(r.Failed);
+        if (r.Failed.Count > 0)
+            return $"\n\n{items} Check the phone is connected and unlocked, then try again; finished items are skipped.\n" + FailureList(r.Failed);
+        return "";
+    }
 
     // ---- copy ----------------------------------------------------------------------------
 
@@ -994,13 +1016,16 @@ public sealed class MainForm : Form
         var requests = Requests(entries, everything: false);
         var destination = settings.Destination;
         BeginWork(requests.Count);
-        worker.Copy(requests, destination, Progress("Copying"), r => UI(() =>
+        worker.Copy(requests, destination, readBack: false, Progress("Copying"), r => UI(() =>
         {
             EndWork();
-            var heading = r.Cancelled ? "Copy cancelled" : r.Failed.Count > 0 ? "Copy finished with errors" : Theme.Say("Copy complete", "Yay, all copied ♥");
-            var msg = $"Copied {Plural(r.Copied, "file")} ({ThumbGrid.FormatSize(r.Bytes)}) to {destination}." +
-                      (r.Skipped > 0 ? $"\nSkipped {r.Skipped:N0} already there." : "") +
-                      (r.Failed.Count > 0 ? $"\n\n{r.Failed.Count:N0} failed. Check the phone is connected and unlocked, then copy again; finished files are skipped.\n" + FailureList(r.Failed) : "");
+            var finished = Finished(entries, requests, r);
+            int copied = finished.Count(e => e.AllFiles.Any(f => r.Copied.Contains(f.Id)));
+            int already = finished.Count - copied, notDone = entries.Count - finished.Count;
+            var heading = r.Cancelled ? "Copy cancelled" : r.Stopped ? "Copy stopped" : notDone > 0 ? "Copy finished with errors" : Theme.Say("Copy complete", "Yay, all copied ♥");
+            var msg = $"Copied {Plural(copied, "item")} ({ThumbGrid.FormatSize(r.Bytes)}) to {destination}." +
+                      (already > 0 ? $"\nSkipped {already:N0} already there." : "") +
+                      (r.Cancelled ? "" : CopyProblems(r, notDone));
             OpenFolderPrompt(heading, msg, destination);
             if (pendingRescan) CheckDevice();
         }));
@@ -1018,23 +1043,24 @@ public sealed class MainForm : Form
         var requests = Requests(entries, everything: true);
         var destination = settings.Destination;
         BeginWork(requests.Count);
-        worker.Copy(requests, destination, Progress("Copying"), copy => UI(() =>
+        // readBack: every file on the PC is compared with the phone's, byte for byte, before anything is deleted.
+        worker.Copy(requests, destination, readBack: true, Progress("Copying and checking"), copy => UI(() =>
         {
-            // Only items whose every file is verified on this PC are deleted from the phone.
-            var safe = entries.Where(e => e.AllFiles.All(f => copy.Verified.Contains(f.Id))).ToList();
-            int kept = entries.Count - safe.Count;
+            // Only items whose every file on this PC matched the phone's are deleted from the phone.
+            var safe = copy.SafeToDelete(entries);
             if (copy.Cancelled || safe.Count == 0)
             {
                 EndWork();
+                int copiedItems = Finished(entries, requests, copy).Count;
                 var msg = (copy.Cancelled ? "The move was cancelled before anything was deleted from the phone. " : "Nothing was deleted from the phone because no item copied completely. ") +
-                          $"Copied {Plural(copy.Copied, "file")} to {destination}." +
-                          (copy.Failed.Count > 0 ? "\n\n" + FailureList(copy.Failed) : "");
-                OpenFolderPrompt(copy.Cancelled ? "Move cancelled" : "Move failed", msg, destination);
+                          $"Copied {Plural(copiedItems, "item")} to {destination}." +
+                          (copy.Cancelled ? "" : CopyProblems(copy, entries.Count - copiedItems));
+                OpenFolderPrompt(copy.Cancelled ? "Move cancelled" : copy.Stopped ? "Move stopped" : "Move failed", msg, destination);
+                if (pendingRescan) CheckDevice();
                 return;
             }
-            var groups = safe.Select(e => e.AllFiles.ToList()).ToList();
-            progress.SetProgress(0, groups.Sum(g => g.Count));
-            worker.Delete(groups, Progress("Removing from phone"), del => UI(() =>
+            progress.SetProgress(0, safe.Sum(e => e.AllFiles.Count()));
+            worker.Delete(safe, Progress("Removing from phone"), del => UI(() =>
             {
                 EndWork();
                 RemoveDeleted(del.Deleted);
@@ -1044,6 +1070,10 @@ public sealed class MainForm : Form
                 var msg = $"Moved {Plural(movedItems, "item")} to {destination}." +
                           (notMoved > 0
                               ? $"\n\n{Plural(notMoved, "item")} stayed on the phone. Anything copied is still on this PC, so it's safe to try again." +
+                                (copy.Stopped
+                                    ? " The copy stopped because a file didn't come off the phone correctly, and after that the phone can send the wrong data: " +
+                                      "unplug the phone, plug it back in and press Refresh first."
+                                    : "") +
                                 "\n" + FailureList(copy.Failed.Concat(del.Failed).ToList())
                               : "");
                 OpenFolderPrompt(heading, msg, destination);
@@ -1055,64 +1085,108 @@ public sealed class MainForm : Form
     // ---- delete --------------------------------------------------------------------------
 
     /// <summary>
-    /// How many entries already have their original in the copy destination (either layout:
-    /// sorted into year/month folders or flat), at the same size as on the phone.
+    /// The PC files said to be copies of these items' phone files: Find on PC's same-file matches, and
+    /// the original in the copy folder (sorted into year/month folders or flat, under its own name or a
+    /// numbered one), at the phone's size and whole. Delete reads each back from the phone before it
+    /// counts (CopyEngine.Confirm): a file can have the right name, size and structure and still be
+    /// another photo's data.
     /// </summary>
-    int AlreadyCopied(List<MediaEntry> entries)
+    List<(int Id, string Path, string Label)> BackupClaims(List<MediaEntry> entries)
     {
+        var claims = new List<(int, string, string)>();
         var dest = settings.Destination;
         bool destThere = Directory.Exists(dest);
-        // A converted copy (Same photo) isn't the original, so it doesn't count here.
-        return entries.Count(e => SafeDuplicate(e) || destThere && new[]
+        foreach (var e in entries)
         {
-            Path.Combine(dest, e.Date.ToString("yyyy"), e.Date.ToString("MM MMMM"), e.Primary.Name),
-            Path.Combine(dest, e.Primary.Name),
-        }.Any(p => File.Exists(p) && new FileInfo(p).Length == e.Primary.Size));
+            // A converted copy (Same photo) isn't the original, so it doesn't count here.
+            if (SafeDuplicate(e))
+                foreach (var f in e.AllFiles)
+                    if (dups!.For(f) is { Tier: DupTier.Exact or DupTier.SameFile } m && File.Exists(m.PcPath))
+                        claims.Add((f.Id, m.PcPath, e.Describe(f)));
+            if (!destThere) continue;
+            foreach (var folder in new[] { Path.Combine(dest, e.Date.ToString("yyyy"), e.Date.ToString("MM MMMM")), dest })
+                if (CopyEngine.AlreadyThere(folder, e.Primary.Name, e.Primary.Size, null, out _) is { } path)
+                    claims.Add((e.Primary.Id, path, e.Primary.Name));
+        }
+        return claims;
     }
 
     void DeleteEntries(List<MediaEntry> entries)
     {
         if (entries.Count == 0 || busy || scanning) return;
-        int fileCount = entries.Sum(e => e.AllFiles.Count());
-        long bytes = entries.Sum(e => e.TotalSize);
         // A PC copy found by Find on PC may have been moved or changed since: check again now.
         int stale = dups?.Revalidate(entries.SelectMany(e => e.AllFiles)) ?? 0;
         if (stale > 0) { RebuildTree(); ApplyView(keepScroll: true); }
-        int copied = AlreadyCopied(entries);
+        var claims = BackupClaims(entries);
+        if (claims.Count == 0) { AskAndDelete(entries, new HashSet<int>(), claims, stale, stopped: false); return; }
+
+        BeginWork(claims.Count);
+        worker.Confirm(claims, Progress("Checking the copy on this PC of"), (confirmed, stopped) => UI(() =>
+        {
+            bool cancelled = worker.CancelRequested;
+            EndWork();
+            if (cancelled) { statusLabel.Text = "Delete cancelled: nothing was deleted"; return; }
+            AskAndDelete(entries, confirmed, claims, stale, stopped);
+        }));
+    }
+
+    /// <summary>
+    /// The Delete dialog, then the delete. An item counts as on this PC only when its original, and every
+    /// other file of it that was said to have a copy, read back from the phone the same as that copy.
+    /// </summary>
+    void AskAndDelete(List<MediaEntry> entries, HashSet<int> confirmed, List<(int Id, string Path, string Label)> claims, int stale, bool stopped)
+    {
+        var claimed = claims.Select(c => c.Id).ToHashSet();
+        var backedUp = entries.Where(e => confirmed.Contains(e.Primary.Id) && e.AllFiles.Where(f => claimed.Contains(f.Id)).All(f => confirmed.Contains(f.Id))).ToList();
+        int copied = backedUp.Count;
+        int unconfirmed = entries.Count(e => e.AllFiles.Any(f => claimed.Contains(f.Id))) - copied;
+        long bytes = entries.Sum(e => e.TotalSize);
         var what = entries.Count == 1 ? entries[0].Primary.Name : $"{entries.Count:N0} items";
         var where = dups == null ? $"your copy folder ({settings.Destination})" : $"your copy folder ({settings.Destination}) or the folders checked with Find on PC";
         var backup = copied == entries.Count
-            ? $"All of them are already on this PC, in {where}."
+            ? $"All of them are already on this PC, in {where}: each copy was read back from the phone and matches."
             : copied == 0
                 ? $"None of them are in {where}. Copy them first, or use Move to PC, if you want to keep them."
                 : $"Only {copied:N0} of {entries.Count:N0} are in {where}. Copy the rest first if you want to keep them.";
+        if (unconfirmed > 0 && !stopped)
+            backup += $"\n\n{Plural(unconfirmed, "item")} {(unconfirmed == 1 ? "has" : "have")} a file on this PC with the same name and size that isn't the same as the phone's, so {(unconfirmed == 1 ? "it doesn't" : "they don't")} count as copied.";
+        if (stopped)
+            backup += "\n\nThe phone sent a file wrongly, and after that it can send the wrong data, so the copies on this PC couldn't all be checked and those don't count. " +
+                      "To check them, unplug the phone, plug it back in, press Refresh and try again.";
         if (stale > 0) backup += $"\n\n{Plural(stale, "file")} found earlier by Find on PC {(stale == 1 ? "has" : "have")} since gone or changed on this PC, so {(stale == 1 ? "it no longer counts" : "they no longer count")} as copied.";
         bool apple = device?.IsApple ?? true;
         var message = apple
-            ? $"{what} ({Plural(fileCount, "file")}, {ThumbGrid.FormatSize(bytes)}) will be deleted from {device?.Name ?? "the iPhone"}, " +
+            ? $"{what} ({ThumbGrid.FormatSize(bytes)}) will be deleted from {device?.Name ?? "the iPhone"}, " +
               "including edited versions, Live Photo clips and edit data.\n\n" + backup + "\n\n" +
               "This can't be undone from this PC. If iCloud Photos is on, they're also deleted from iCloud and your other devices."
-            : $"{what} ({Plural(fileCount, "file")}, {ThumbGrid.FormatSize(bytes)}) will be deleted from {device?.Name ?? "the phone"}.\n\n" + backup + "\n\n" +
+            : $"{what} ({ThumbGrid.FormatSize(bytes)}) will be deleted from {device?.Name ?? "the phone"}.\n\n" + backup + "\n\n" +
               "This deletes them permanently: they don't go to the phone's Recycle bin, and it can't be undone from this PC. " +
               "Copies already backed up to Google Photos or another cloud service stay there.";
-        if (HudDialog.Show(this, "Delete from phone", message,
-                (entries.Count == 1 ? "Delete 1 item" : $"Delete {entries.Count:N0} items", ButtonKind.Danger, DialogResult.Yes),
-                ("Cancel", ButtonKind.Ghost, DialogResult.Cancel)) != DialogResult.Yes)
-            return;
+        var buttons = new List<(string, ButtonKind, DialogResult)>();
+        // When only some are on this PC, offer to delete just those (and make it the first choice).
+        if (copied > 0 && copied < entries.Count)
+            buttons.Add((copied == 1 ? "Delete only the 1 on this PC" : $"Delete only the {copied:N0} on this PC", ButtonKind.Danger, DialogResult.OK));
+        buttons.Add((entries.Count == 1 ? "Delete 1 item" : $"Delete all {entries.Count:N0} items", copied > 0 && copied < entries.Count ? ButtonKind.Secondary : ButtonKind.Danger, DialogResult.Yes));
+        buttons.Add(("Cancel", ButtonKind.Ghost, DialogResult.Cancel));
+        var answer = HudDialog.Show(this, "Delete from phone", message, buttons.ToArray());
+        if (answer == DialogResult.OK) entries = backedUp;
+        else if (answer != DialogResult.Yes) return;
 
-        BeginWork(fileCount);
-        worker.Delete(entries.Select(e => e.AllFiles.ToList()).ToList(), Progress("Deleting"), r => UI(() =>
+        BeginWork(entries.Sum(e => e.AllFiles.Count()));
+        worker.Delete(entries, Progress("Deleting"), r => UI(() =>
         {
             EndWork();
             RemoveDeleted(r.Deleted);
+            var gone = r.Deleted.ToHashSet();
+            int deletedItems = entries.Count(e => e.AllFiles.All(f => gone.Contains(f.Id)));
             if (r.Failed.Count > 0 || r.Cancelled)
                 HudDialog.Show(this, r.Cancelled ? "Delete stopped" : "Some items weren't deleted",
-                    $"Deleted {Plural(r.Deleted.Count, "file")}." +
+                    $"Deleted {Plural(deletedItems, "item")}." +
                     (r.Failed.Count > 0
                         ? $"\n\n{r.Failed.Count:N0} couldn't be deleted. The phone can refuse some items, for example ones synced from a computer; delete those on the phone instead.\n" + FailureList(r.Failed)
                         : ""),
                     ("Close", ButtonKind.Ghost, DialogResult.Cancel));
-            else statusLabel.Text = $"Deleted {Plural(r.Deleted.Count, "file")} from the phone";
+            else statusLabel.Text = $"Deleted {Plural(deletedItems, "item")} from the phone";
             if (pendingRescan) CheckDevice();
         }));
     }

@@ -153,7 +153,7 @@ public sealed class DuplicateFinder
         {
             if (cancelled()) break;
             var f = wanted[i];
-            progress($"Comparing {f.Name}", i, wanted.Count);
+            progress("Comparing with the PC folders", i, wanted.Count);
             var candidates = bySize.GetValueOrDefault(f.Size, new()).Concat(byStem.GetValueOrDefault(Stem(f.Name), new())).Distinct().ToList();
             if (candidates.Count == 0) continue;
             var match = await Task.Run(() => MatchOne(f, candidates, exact, result));
@@ -239,8 +239,9 @@ public sealed class DuplicateFinder
         string stem = Stem(f.Name), ext = Ext(f.Name);
 
         // Same file: same size and format, and the same name (allowing "name (2)") or the same time.
-        var same = candidates.FirstOrDefault(c => c.Size == f.Size && Ext(c.Name) == ext && Stem(c.Name) == stem)
-                   ?? candidates.FirstOrDefault(c => c.Size == f.Size && Ext(c.Name) == ext && SameTime(f, c));
+        // The PC copy must also be whole: a broken copy can have the right name and size but hold another file's data.
+        var same = candidates.FirstOrDefault(c => c.Size == f.Size && Ext(c.Name) == ext && Stem(c.Name) == stem && FileCheck.Problem(c.Path) == null)
+                   ?? candidates.FirstOrDefault(c => c.Size == f.Size && Ext(c.Name) == ext && SameTime(f, c) && FileCheck.Problem(c.Path) == null);
         if (same != null)
         {
             var reason = Stem(same.Name) == stem ? "same name and size" : "same size and time, renamed";

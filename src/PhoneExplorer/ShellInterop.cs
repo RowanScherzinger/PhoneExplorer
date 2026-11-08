@@ -80,7 +80,7 @@ public interface IFileOperation
     void RenameItems(IntPtr pUnkItems, [MarshalAs(UnmanagedType.LPWStr)] string pszNewName);
     void MoveItem(IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName, IntPtr pfopsItem);
     void MoveItems(IntPtr punkItems, IShellItem psiDestinationFolder);
-    void CopyItem(IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszCopyName, IntPtr pfopsItem);
+    void CopyItem(IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszCopyName, IFileOperationProgressSink? pfopsItem);
     void CopyItems(IntPtr punkItems, IShellItem psiDestinationFolder);
     void DeleteItem(IShellItem psiItem, IntPtr pfopsItem);
     void DeleteItems(IntPtr punkItems);
@@ -88,6 +88,59 @@ public interface IFileOperation
     void PerformOperations();
     [return: MarshalAs(UnmanagedType.Bool)]
     bool GetAnyOperationsAborted();
+}
+
+/// <summary>Callbacks from IFileOperation. The vtable order must match shobjidl.h exactly.</summary>
+[ComImport, Guid("04b0f1a7-9490-44bc-96e1-4296a31252e2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IFileOperationProgressSink
+{
+    void StartOperations();
+    void FinishOperations(int hrResult);
+    void PreRenameItem(uint dwFlags, IShellItem psiItem, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName);
+    void PostRenameItem(uint dwFlags, IShellItem psiItem, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName, int hrRename, IShellItem? psiNewlyCreated);
+    void PreMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName);
+    void PostMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName, int hrMove, IShellItem? psiNewlyCreated);
+    void PreCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName);
+    void PostCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName, int hrCopy, IShellItem? psiNewlyCreated);
+    void PreDeleteItem(uint dwFlags, IShellItem psiItem);
+    void PostDeleteItem(uint dwFlags, IShellItem psiItem, int hrDelete, IShellItem? psiNewlyCreated);
+    void PreNewItem(uint dwFlags, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName);
+    void PostNewItem(uint dwFlags, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string? pszNewName, [MarshalAs(UnmanagedType.LPWStr)] string? pszTemplateName, uint dwFileAttributes, int hrNew, IShellItem? psiNewItem);
+    void UpdateProgress(uint iWorkTotal, uint iWorkSoFar);
+    void ResetTimer();
+    void PauseTimer();
+    void ResumeTimer();
+}
+
+/// <summary>Records how one copy ended: the real error (FOF_NOERRORUI otherwise hides it) and the file it made.</summary>
+[ComVisible(true), ClassInterface(ClassInterfaceType.None)]
+sealed class CopySink : IFileOperationProgressSink
+{
+    public int Result;
+    public string? Created;
+
+    public void PostCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, string? pszNewName, int hrCopy, IShellItem? psiNewlyCreated)
+    {
+        Result = hrCopy;
+        try { Created = psiNewlyCreated?.GetDisplayName(SIGDN.FILESYSPATH); }
+        catch (COMException) { }
+    }
+
+    public void FinishOperations(int hrResult) { if (Result >= 0 && hrResult < 0) Result = hrResult; }
+    public void StartOperations() { }
+    public void PreRenameItem(uint dwFlags, IShellItem psiItem, string? pszNewName) { }
+    public void PostRenameItem(uint dwFlags, IShellItem psiItem, string? pszNewName, int hrRename, IShellItem? psiNewlyCreated) { }
+    public void PreMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, string? pszNewName) { }
+    public void PostMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, string? pszNewName, int hrMove, IShellItem? psiNewlyCreated) { }
+    public void PreCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, string? pszNewName) { }
+    public void PreDeleteItem(uint dwFlags, IShellItem psiItem) { }
+    public void PostDeleteItem(uint dwFlags, IShellItem psiItem, int hrDelete, IShellItem? psiNewlyCreated) { }
+    public void PreNewItem(uint dwFlags, IShellItem psiDestinationFolder, string? pszNewName) { }
+    public void PostNewItem(uint dwFlags, IShellItem psiDestinationFolder, string? pszNewName, string? pszTemplateName, uint dwFileAttributes, int hrNew, IShellItem? psiNewItem) { }
+    public void UpdateProgress(uint iWorkTotal, uint iWorkSoFar) { }
+    public void ResetTimer() { }
+    public void PauseTimer() { }
+    public void ResumeTimer() { }
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -259,18 +312,88 @@ public static class Shell
         finally { Marshal.ReleaseComObject(op); }
     }
 
-    /// <summary>Copies one item into a local folder without any shell UI. Blocks until done.</summary>
-    public static void Copy(IShellItem item, string destFolder, string? newName)
+    /// <summary>
+    /// Copies one item into a local folder without any shell UI. Blocks until done. Returns the path
+    /// of the file it wrote, or null if Windows didn't say. Throws IOException with the real reason.
+    /// </summary>
+    public static string? Copy(IShellItem item, string destFolder, string? newName)
     {
         Directory.CreateDirectory(destFolder);
+        var dest = FromFileSystemPath(destFolder);
         var op = (IFileOperation)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_FileOperation)!)!;
+        var sink = new CopySink();
         try
         {
             op.SetOperationFlags(FOF_NO_UI);
-            op.CopyItem(item, FromFileSystemPath(destFolder), newName, IntPtr.Zero);
-            op.PerformOperations();
-            if (op.GetAnyOperationsAborted()) throw new IOException("The copy was aborted.");
+            op.CopyItem(item, dest, newName, sink);
+            try { op.PerformOperations(); }
+            catch (COMException ex) { throw new IOException(Reason(sink.Result < 0 ? sink.Result : ex.HResult)); }
+            if (sink.Result < 0) throw new IOException(Reason(sink.Result));
+            if (op.GetAnyOperationsAborted()) throw new IOException("the phone stopped sending it");
+            return sink.Created;
         }
-        finally { Marshal.ReleaseComObject(op); }
+        finally
+        {
+            Marshal.ReleaseComObject(op);
+            Marshal.ReleaseComObject(dest);
+        }
+    }
+
+    static Guid BHID_Stream = new("1cebb3ab-7c10-499a-a417-92ca16c4cb83");
+    static Guid IID_IStream = new("0000000c-0000-0000-C000-000000000046");
+
+    /// <summary>Opens an item's contents for reading, straight from the device (nothing is written to disk).</summary>
+    public static Stream OpenRead(IShellItem item) => new ShellReadStream((IStream)item.BindToHandler(IntPtr.Zero, ref BHID_Stream, ref IID_IStream));
+
+    /// <summary>Windows' text for an error code, with the code, so a report says what actually went wrong.</summary>
+    static string Reason(int hr)
+    {
+        var text = Marshal.GetExceptionForHR(hr)?.Message.Trim().TrimEnd('.') ?? "unknown error";
+        // Messages for codes Windows has no text for already include the code.
+        return text.Contains("0x", StringComparison.OrdinalIgnoreCase) ? text : $"{text} (0x{hr:X8})";
+    }
+}
+
+/// <summary>A forward-only, read-only Stream over a COM IStream.</summary>
+sealed class ShellReadStream : Stream
+{
+    IStream? com;
+    readonly IntPtr count = Marshal.AllocHGlobal(sizeof(int));
+    byte[] chunk = Array.Empty<byte>();
+
+    public ShellReadStream(IStream com) => this.com = com;
+
+    public override int Read(byte[] buffer, int offset, int length)
+    {
+        var target = buffer;
+        if (offset != 0)
+        {
+            if (chunk.Length < length) chunk = new byte[length];
+            target = chunk;
+        }
+        try { (com ?? throw new ObjectDisposedException(nameof(ShellReadStream))).Read(target, length, count); }
+        catch (COMException ex) { throw new IOException("the phone stopped sending it: " + ex.Message.Trim(), ex); }
+        int n = Marshal.ReadInt32(count);
+        if (offset != 0) Buffer.BlockCopy(chunk, 0, buffer, offset, n);
+        return n;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (com == null) return;
+        Marshal.ReleaseComObject(com);
+        com = null;
+        Marshal.FreeHGlobal(count);
+        base.Dispose(disposing);
     }
 }
