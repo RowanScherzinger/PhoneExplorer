@@ -19,15 +19,60 @@ namespace PhoneExplorer.Hud;
 /// </summary>
 public static class Theme
 {
-    public static readonly IReadOnlyList<ThemeDef> All = new[] { JarvisApps.Create(), PastelGirl.Create() };
+    // Windows 11 is the default theme. JarvisApps and PastelGirl remain available.
+    static readonly List<ThemeDef> themes = new()
+    {
+        WindowsTheme.Create(),
+        JarvisApps.Create(),
+        PastelGirl.Create()
+    };
 
-    public static ThemeDef Current { get; private set; } = All[0];
+    public static IReadOnlyList<ThemeDef> All => themes;
 
-    /// <summary>Switches theme (unknown ids fall back to the first). Returns true if it changed.</summary>
+    public static ThemeDef Current { get; private set; } = themes[0];
+
+    /// <summary>
+    /// Selects a theme. Unknown IDs fall back to Windows.
+    /// Returns true only when the active theme changes.
+    /// </summary>
     public static bool Use(string? id)
     {
-        var next = All.FirstOrDefault(t => t.Id == id) ?? All[0];
-        if (next == Current) return false;
+        ThemeDef next;
+
+        if (id == "Windows")
+        {
+            next = WindowsTheme.Create();
+        }
+        else
+        {
+            next = themes.FirstOrDefault(t => t.Id == id) ?? themes[0];
+        }
+
+        if (Current.Id == next.Id && Current.Dark == next.Dark)
+            return false;
+
+        Current = next;
+
+        if (id == "Windows")
+            themes[0] = next;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Refreshes the Windows palette when the system light/dark setting changes.
+    /// </summary>
+    public static bool RefreshSystemTheme()
+    {
+        if (Current.Id != "Windows")
+            return false;
+
+        var next = WindowsTheme.Create();
+
+        if (Current.Dark == next.Dark)
+            return false;
+
+        themes[0] = next;
         Current = next;
         return true;
     }
@@ -105,6 +150,7 @@ public static class Theme
     public static int LoopPulse => Current.LoopPulse;
     public static int ControlHeight => Current.ControlHeight;
     public static int PrimaryHeight => Current.PrimaryHeight;
+
     /// <summary>HUD details on (brackets, edge bars, boot flicker) or the soft look.</summary>
     public static bool Hud => Current.Hud;
 
@@ -142,15 +188,22 @@ public static class Theme
 
     /// <summary>Running text: mono in the HUD, the sans face in soft themes.</summary>
     public static Font Body(float? px = null) => Font(Current.Body, px ?? TextMd);
+
     /// <summary>Longer prose (dialog messages, empty states).</summary>
     public static Font Sans(float? px = null) => Font(Current.Sans, px ?? TextMd);
+
     public static Font Mono(float? px = null) => Font(Current.Mono, px ?? TextMd);
+
     /// <summary>Small section labels and units.</summary>
     public static Font Label(float? px = null) => Font(Current.Label, px ?? Text2xs);
+
     public static Font Heading(float? px = null) => Font(Current.Heading, px ?? TextXs);
+
     public static Font ButtonFont(float? px = null) => Font(Current.Button, px ?? TextXs);
+
     /// <summary>Tabular readout values.</summary>
     public static Font Number(float? px = null) => Font(Current.Number, px ?? TextMd);
+
     /// <summary>The one big readout per panel.</summary>
     public static Font BigNumber(float px) => Font(Current.BigNumber, px);
 
