@@ -4,12 +4,11 @@ namespace PhoneExplorer.Hud.Themes;
 
 /// <summary>
 /// Windows 11: the default Fluent look of a Windows 11 app, in light or dark as Windows is set
-/// (Settings › Personalization › Colors › app mode), with the user's accent colour. There is no
-/// style guide for it: colours are mirrored by hand from WinUI's
-/// controls/dev/CommonStyles/Common_themeresources_any.xaml in microsoft/microsoft-ui-xaml
-/// (copied 2026-11-08; the "Default" dictionary is dark, "Light" is light), and type, corners and
-/// timing from the Fluent 2 guidance for Windows (Segoe UI Variable, 4px control and 8px overlay
-/// corners, 32px controls). Rebuilt by <see cref="Theme.Refresh"/> when the system setting changes.
+/// (Settings › Personalization › Colors › app mode), with the user's accent colour. Mirrored by
+/// hand from F:\Projects\StyleGuides\Win11\tokens\tokens.css (2026-11-08), whose colours come from
+/// WinUI's Common_themeresources_any.xaml; the WinUI names are in the comments here too. When the
+/// guide changes, re-copy the values here. Rebuilt by <see cref="Theme.Refresh"/> when the system
+/// setting changes.
 /// </summary>
 public static class Windows11
 {
