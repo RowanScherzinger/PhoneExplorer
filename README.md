@@ -34,7 +34,7 @@ The app checks for a new version each time it starts. When there is one, it asks
 
   With **Exact match** ticked, photos are copied from the phone and compared pixel by pixel, and videos are also compared on length and resolution. That's slower. HEIC needs the free HEIF and HEVC extensions from the Microsoft Store.
 - **Settings** (bottom right) sets where the cache goes and how big it may grow (20 GB by default). The cache holds thumbnails, opened files, and copies made by Find on PC. Changing the location moves the cache there. It stays in its own `PhoneExplorer cache` folder, removes the least recently used files when full, and deletes anything it doesn't recognise there when the app starts.
-- Two looks: **Jarvis** (copper and gold) and **Pastel Girl** (soft pinks and creams). Switch with the theme button at the bottom right; the choice is remembered.
+- Three looks: **Windows** (the default; the Windows 11 style, light or dark as Windows is set, in your accent colour), **Jarvis** (copper and gold) and **Pastel Girl** (soft pinks and creams). Switch with the theme button at the bottom right; the choice is remembered.
 - Picks the phone up automatically when it is plugged in; F5 refreshes. With more than one phone plugged in, click the DEVICE panel to switch between them. All phones copy to the same folder.
 
 ## iPhone

@@ -146,6 +146,8 @@ public sealed class MainForm : Form
             CheckForUpdate();
         };
         FormClosing += OnClosing;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnSystemTheme;
+        FormClosed += (_, _) => Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnSystemTheme;
         ApplyTheme();
         UpdateButtons();
     }
@@ -154,6 +156,8 @@ public sealed class MainForm : Form
     {
         var s = Settings.Load();
         Theme.Use(s.ThemeName);
+        // Runs as a field initializer, before any window exists, so every native part starts in the right mode.
+        Theme.ApplyColorMode();
         return s;
     }
 
@@ -238,12 +242,12 @@ public sealed class MainForm : Form
         var label = libraryLabel;
         label.Paint += (_, e) =>
         {
-            // Section label over a hairline; soft themes add a sparkle by it (docs/06-iconography.md).
+            // Section label over a hairline; cute themes add a sparkle by it (docs/06-iconography.md).
             var g = e.Graphics;
             int x = LogicalToDeviceUnits(Theme.Hud ? Theme.Space3 : Theme.Space5), y = label.Height - LogicalToDeviceUnits(Theme.Space4) - (Theme.Hud ? 0 : LogicalToDeviceUnits(Theme.Space1));
             var font = Theme.Label();
             int w = Theme.DrawTracked(g, Theme.Case("Library"), font, Theme.ColorEyebrow, new Point(x, y), Theme.TrackingLabel);
-            if (!Theme.Hud)
+            if (Theme.Cute)
             {
                 int d = LogicalToDeviceUnits(Theme.Space3);
                 int h = TextRenderer.MeasureText(g, "X", font, Size.Empty, TextFormatFlags.NoPadding).Height;
@@ -312,16 +316,30 @@ public sealed class MainForm : Form
         themeButton.DropDown.Renderer = new HudRenderer();
         foreach (var def in Theme.All)
         {
-            var item = HudRenderer.Style(new ToolStripMenuItem(def.DisplayName, null, (_, _) => SwitchTheme(def)) { Tag = def }, ItemRole.Ghost);
+            var item = HudRenderer.Style(new ToolStripMenuItem(def.DisplayName, null, (_, _) => SwitchTheme(def.Id)) { Tag = def.Id }, ItemRole.Ghost);
             themeButton.DropDownItems.Add(item);
         }
     }
 
-    void SwitchTheme(ThemeDef def)
+    void SwitchTheme(string id)
     {
-        if (!Theme.Use(def.Id)) return;
-        settings.ThemeName = def.Id;
+        if (!Theme.Use(id)) return;
+        settings.ThemeName = id;
         settings.Save();
+        Restyle();
+    }
+
+    /// <summary>Windows changed light/dark mode or the accent colour: the Windows theme follows it.</summary>
+    void OnSystemTheme(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is not (Microsoft.Win32.UserPreferenceCategory.General or Microsoft.Win32.UserPreferenceCategory.Color)) return;
+        if (!IsHandleCreated || IsDisposed) return;
+        BeginInvoke(() => { if (Theme.Refresh()) Restyle(); });
+    }
+
+    void Restyle()
+    {
+        Theme.ApplyColorMode();
         SuspendLayout();
         ApplyTheme();
         ResumeLayout(true);
@@ -346,10 +364,12 @@ public sealed class MainForm : Form
         themeButton.Text = Theme.Current.DisplayName;
         HudRenderer.Style(themeButton, ItemRole.Ghost);
         foreach (ToolStripMenuItem item in themeButton.DropDownItems)
-            item.Checked = item.Tag == Theme.Current;
+            item.Checked = (string?)item.Tag == Theme.Current.Id;
         devicePanel.ApplyTheme();
         tree.ApplyTheme();
         grid.ApplyTheme();
+        HudWindow.Native(tree);
+        HudWindow.Native(grid);
         if (IsHandleCreated) HudWindow.Apply(this);
         UpdateSelectionInfo();
         Invalidate(true);

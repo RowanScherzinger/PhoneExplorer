@@ -16,12 +16,28 @@ public static class HudWindow
 
     static void Set(IntPtr hwnd, int attr, int value) => DwmSetWindowAttribute(hwnd, attr, ref value, sizeof(int));
 
+    const int ColorDefault = unchecked((int)0xFFFFFFFF); // DWMWA_COLOR_DEFAULT
+
+    /// <summary>Sets the title bar; system-chrome themes keep Windows' own caption, border and text colours.</summary>
     public static void Apply(Form form)
     {
+        bool system = Theme.Current.SystemChrome;
         Set(form.Handle, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, Theme.Current.Dark ? 1 : 0);
-        Set(form.Handle, 35 /* DWMWA_CAPTION_COLOR */, ColorRef(Theme.ColorBgElevated));
-        Set(form.Handle, 34 /* DWMWA_BORDER_COLOR */, ColorRef(Theme.SolidBorder));
-        Set(form.Handle, 36 /* DWMWA_TEXT_COLOR */, ColorRef(Theme.ColorText));
+        Set(form.Handle, 35 /* DWMWA_CAPTION_COLOR */, system ? ColorDefault : ColorRef(Theme.ColorBgElevated));
+        Set(form.Handle, 34 /* DWMWA_BORDER_COLOR */, system ? ColorDefault : ColorRef(Theme.SolidBorder));
+        Set(form.Handle, 36 /* DWMWA_TEXT_COLOR */, system ? ColorDefault : ColorRef(Theme.ColorText));
+    }
+
+    [System.Runtime.InteropServices.DllImport("uxtheme.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int SetWindowTheme(IntPtr hwnd, string appName, string? idList);
+
+    /// <summary>
+    /// Re-skins a native control's own parts (scrollbars) light or dark after a theme change.
+    /// The colour mode set at startup only reaches controls created after it.
+    /// </summary>
+    public static void Native(Control control)
+    {
+        if (control.IsHandleCreated) SetWindowTheme(control.Handle, Theme.Current.Dark ? "DarkMode_Explorer" : "Explorer", null);
     }
 
     /// <summary>Round themes have rounded popups: Windows draws the corner and the border.</summary>
@@ -32,7 +48,7 @@ public static class HudWindow
     {
         if (hwnd == IntPtr.Zero) return;
         Set(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, RoundPopups ? 2 /* ROUND */ : 0 /* DEFAULT */);
-        Set(hwnd, 34 /* DWMWA_BORDER_COLOR */, RoundPopups ? ColorRef(Theme.SolidBorderStrong) : unchecked((int)0xFFFFFFFF) /* DWMWA_COLOR_DEFAULT */);
+        Set(hwnd, 34 /* DWMWA_BORDER_COLOR */, RoundPopups && !Theme.Current.SystemChrome ? ColorRef(Theme.SolidBorderStrong) : ColorDefault);
     }
 }
 

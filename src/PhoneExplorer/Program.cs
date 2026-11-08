@@ -6,10 +6,8 @@ static class Program
     static void Main()
     {
         ApplicationConfiguration.Initialize();
-        // Dark only (style guide decisions/0002): native scrollbars, title bar and common controls render dark.
-#pragma warning disable WFO5001
-        Application.SetColorMode(SystemColorMode.Dark);
-#pragma warning restore WFO5001
+        // Native scrollbars and common controls follow the theme's light or dark mode: MainForm sets it
+        // (Theme.ApplyColorMode) while loading settings, before any window is created.
         Application.Run(new MainForm());
     }
 }

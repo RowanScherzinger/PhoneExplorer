@@ -19,17 +19,45 @@ namespace PhoneExplorer.Hud;
 /// </summary>
 public static class Theme
 {
-    public static readonly IReadOnlyList<ThemeDef> All = new[] { JarvisApps.Create(), PastelGirl.Create() };
+    // The first is the default. Windows11 is rebuilt by Refresh, so compare themes by Id, not reference.
+    static readonly ThemeDef[] all = { Windows11.Create(), JarvisApps.Create(), PastelGirl.Create() };
+    public static IReadOnlyList<ThemeDef> All => all;
 
-    public static ThemeDef Current { get; private set; } = All[0];
+    public static ThemeDef Current { get; private set; } = all[0];
 
     /// <summary>Switches theme (unknown ids fall back to the first). Returns true if it changed.</summary>
     public static bool Use(string? id)
     {
-        var next = All.FirstOrDefault(t => t.Id == id) ?? All[0];
+        var next = all.FirstOrDefault(t => t.Id == id) ?? all[0];
         if (next == Current) return false;
         Current = next;
         return true;
+    }
+
+    /// <summary>
+    /// Rebuilds the Windows theme from the system's light/dark mode and accent colour (call it when
+    /// Windows reports a preference change). Returns true if the current theme changed.
+    /// </summary>
+    public static bool Refresh()
+    {
+        int i = Array.FindIndex(all, t => t.Id == Windows11.Id);
+        var fresh = Windows11.Create();
+        if (fresh.Dark == all[i].Dark && fresh.Accent == all[i].Accent && fresh.AccentText == all[i].AccentText) return false;
+        bool current = Current == all[i];
+        all[i] = fresh;
+        if (current) Current = fresh;
+        return current;
+    }
+
+    /// <summary>
+    /// Light or dark native parts (scrollbars, text boxes, common dialogs) to match the theme.
+    /// Windows created before a change keep their mode; see HudWindow.Native for those.
+    /// </summary>
+    public static void ApplyColorMode()
+    {
+#pragma warning disable WFO5001
+        Application.SetColorMode(Current.Dark ? SystemColorMode.Dark : SystemColorMode.Classic);
+#pragma warning restore WFO5001
     }
 
     // ---- Semantic colour -----------------------------------------------------------------
@@ -107,6 +135,8 @@ public static class Theme
     public static int PrimaryHeight => Current.PrimaryHeight;
     /// <summary>HUD details on (brackets, edge bars, boot flicker) or the soft look.</summary>
     public static bool Hud => Current.Hud;
+    /// <summary>Hearts, moons, sparkles and playful copy (soft themes that want them).</summary>
+    public static bool Cute => Current.Cute;
 
     // ---- Helpers -------------------------------------------------------------------------
 
@@ -126,8 +156,8 @@ public static class Theme
     /// <summary>Label, heading and button text as the theme writes it: capitals, or as given (sentence case).</summary>
     public static string Case(string text) => Current.Uppercase ? text.ToUpperInvariant() : text;
 
-    /// <summary>Copy for moments the soft theme makes cute (success, empty states); plain words otherwise.</summary>
-    public static string Say(string plain, string cute) => Current.Hud ? plain : cute;
+    /// <summary>Copy for moments a cute theme makes cute (success, empty states); plain words otherwise.</summary>
+    public static string Say(string plain, string cute) => Current.Cute ? cute : plain;
 
     static readonly Dictionary<(string, float, FontStyle), Font> fonts = new();
 
@@ -276,8 +306,9 @@ public static class Theme
 
     /// <summary>
     /// Status glyphs, always shown with words. HUD (docs/01-color.md): filled diamond, hollow
-    /// diamond, hollow square, triangle, filled square, circle. Soft (decisions/0010): filled heart,
-    /// crescent moon, hollow heart, triangle, broken heart, dot. Drawn as paths, never emoji or fonts.
+    /// diamond, hollow square, triangle, filled square, circle. Cute (decisions/0010): filled heart,
+    /// crescent moon, hollow heart, triangle, broken heart, dot. Plain (Windows): filled dot,
+    /// half-filled ring, ring, triangle, ring with a cross, dot. Drawn as paths, never emoji or fonts.
     /// </summary>
     public static void DrawStatus(Graphics g, Status status, Rectangle r, Color color)
     {
@@ -298,6 +329,26 @@ public static class Theme
                 case Status.Warning: g.FillPolygon(brush, triangle); break;
                 case Status.Info: g.FillEllipse(brush, r); break;
             }
+        else if (!Cute)
+        {
+            var ring = RectangleF.Inflate(r, -pen.Width / 2, -pen.Width / 2);
+            switch (status)
+            {
+                case Status.Ok: g.FillEllipse(brush, r); break;
+                case Status.Pending: g.DrawEllipse(pen, ring); g.FillPie(brush, r.X, r.Y, r.Width, r.Height, 90, 180); break;
+                case Status.Idle: g.DrawEllipse(pen, ring); break;
+                case Status.Danger:
+                {
+                    g.DrawEllipse(pen, ring);
+                    float k = r.Width * 0.3f;
+                    g.DrawLine(pen, cx - k, cy - k, cx + k, cy + k);
+                    g.DrawLine(pen, cx - k, cy + k, cx + k, cy - k);
+                    break;
+                }
+                case Status.Warning: pen.LineJoin = LineJoin.Round; g.FillPolygon(brush, triangle); g.DrawPolygon(pen, triangle); break;
+                case Status.Info: g.FillEllipse(brush, RectangleF.Inflate(r, -r.Width * 0.15f, -r.Height * 0.15f)); break;
+            }
+        }
         else
             switch (status)
             {
@@ -311,10 +362,10 @@ public static class Theme
         g.SmoothingMode = old;
     }
 
-    /// <summary>The "new" mark: the info circle in the HUD, a sparkle in soft themes (docs/06-iconography.md).</summary>
+    /// <summary>The "new" mark: the info circle, or a sparkle in cute themes (docs/06-iconography.md).</summary>
     public static void DrawNewMark(Graphics g, Rectangle r, Color color)
     {
-        if (Hud) { DrawStatus(g, Status.Info, r, color); return; }
+        if (!Cute) { DrawStatus(g, Status.Info, r, color); return; }
         DrawSparkle(g, RectangleF.Inflate(r, r.Width * 0.2f, r.Height * 0.2f), color);
     }
 

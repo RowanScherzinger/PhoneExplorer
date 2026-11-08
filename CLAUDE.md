@@ -9,9 +9,11 @@ RowanScherzinger/PhoneExplorer. `Updater.cs` finds them by tag `vX.Y.Z` and the 
 `PhoneExplorer.exe`, so keep both, and bump `<Version>` in the csproj before each release.
 
 ## Visual style
-The app has swappable themes, one per style guide, picked in the status bar and saved as
-`Settings.ThemeName`:
-- Jarvis (default): `F:\Projects\StyleGuides\JarvisApps` (read its CLAUDE.md first).
+The app has swappable themes, picked in the status bar and saved as `Settings.ThemeName`:
+- Windows (default): the Windows 11 Fluent look. No style guide: colours are mirrored from WinUI's
+  `Common_themeresources_any.xaml`. It follows the system light/dark mode and accent colour, live
+  (`Theme.Refresh` on `UserPreferenceChanged`), so its `ThemeDef` is rebuilt: compare themes by `Id`.
+- Jarvis: `F:\Projects\StyleGuides\JarvisApps` (read its CLAUDE.md first).
 - Pastel Girl: `F:\Projects\StyleGuides\PastelGirl` (dark variant).
 
 This is a native app, so it can't use `tokens.css` directly. Each guide's tokens are mirrored
@@ -26,7 +28,10 @@ Rules that keep themes swappable:
 - Write label, heading and button text in sentence case. `Theme.Case()` uppercases it for HUD themes.
 - Use the role helpers: `Theme.Body/Label/Heading/ButtonFont/Number/BigNumber`,
   `Theme.Fill/Stroke` with a `Corner`, and `Theme.DrawStatus`. HUD-only details (brackets, edge
-  bars, boot flicker) check `Theme.Hud`.
+  bars, boot flicker) check `Theme.Hud`. Cute details (hearts, sparkles, `Theme.Say` copy) check
+  `Theme.Cute`; a soft theme without them (Windows) is plain.
+- Native parts (scrollbars, text boxes, common dialogs) follow `ThemeDef.Dark` through
+  `Theme.ApplyColorMode`, set before the first window; `HudWindow.Native` re-skins existing ones.
 - Adding a guide means a new `Themes/*.cs` and an entry in `Theme.All`.
 
 ## Disk cache

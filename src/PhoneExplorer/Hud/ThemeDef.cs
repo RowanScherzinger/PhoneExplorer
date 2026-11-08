@@ -16,6 +16,8 @@ public sealed class ThemeDef
     public required string DisplayName { get; init; }
     /// <summary>The window title bar and native controls follow this.</summary>
     public bool Dark { get; init; } = true;
+    /// <summary>The title bar and popup borders keep Windows' own colours instead of the theme's.</summary>
+    public bool SystemChrome { get; init; }
 
     // ---- Colour --------------------------------------------------------------------------
 
@@ -107,9 +109,14 @@ public sealed class ThemeDef
 
     /// <summary>
     /// The HUD details: corner brackets, edge bars on selected rows, the boot flicker, segmented
-    /// progress and square status shapes. Off means soft: hearts and moons, sparkles, dots.
+    /// progress and square status shapes. Off means soft: round, with <see cref="Cute"/> details or plain.
     /// </summary>
     public required bool Hud { get; init; }
+    /// <summary>
+    /// The cute details of the soft look: hearts and moons for status, sparkles, playful copy.
+    /// Off in a soft theme means plain: dots and rings, plain words.
+    /// </summary>
+    public required bool Cute { get; init; }
 
     // ---- Derived -------------------------------------------------------------------------
 

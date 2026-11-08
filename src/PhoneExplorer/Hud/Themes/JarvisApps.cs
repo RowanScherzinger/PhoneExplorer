@@ -105,6 +105,7 @@ public static class JarvisApps
             DurationNormal = 220,
             LoopPulse = 1600,
             Hud = true,
+            Cute = false,
         };
     }
 }

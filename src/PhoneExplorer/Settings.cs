@@ -25,7 +25,7 @@ public sealed class Settings
     public List<string>? DuplicateFolders { get; set; }
     public bool DuplicateExact { get; set; } = false;
     /// <summary>A ThemeDef.Id; unknown ids fall back to the first theme.</summary>
-    public string ThemeName { get; set; } = "JarvisApps";
+    public string ThemeName { get; set; } = "Windows";
 
     static string? dataDir;
 

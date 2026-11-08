@@ -229,10 +229,10 @@ public sealed class ThumbGrid : ScrollableControl
         int y = (ClientSize.Height - total) / 2;
 
         // HUD: a bracketed frame around the message, like a targeting reticle on empty space.
-        // Soft: a small sparkle motif above it (docs/04-components.md: Empty states).
+        // Cute: a small sparkle motif above it (docs/04-components.md: Empty states).
         var frame = new Rectangle((ClientSize.Width - width) / 2 - S(Theme.Space6), y - S(Theme.Space6), width + S(Theme.Space6) * 2, total + S(Theme.Space6) * 2);
         Theme.DrawBrackets(g, frame, Theme.Alpha(Theme.ColorAccent, Theme.BracketRestOpacity), S(Theme.BracketSize), Theme.LineThin);
-        if (!Theme.Hud)
+        if (Theme.Cute)
         {
             int m = S(Theme.Space6), my = y - m - S(Theme.Space4);
             Theme.DrawSparkle(g, new Rectangle((ClientSize.Width - m) / 2, my, m, m), Theme.ColorAccent);

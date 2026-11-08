@@ -104,6 +104,7 @@ public static class PastelGirl
             DurationNormal = 260,
             LoopPulse = 1800,
             Hud = false,
+            Cute = true,
         };
     }
 }
