@@ -3,5 +3,9 @@ obj/
 publish/
 .vs/
 *.user
+
+# This PC's app cache (Settings > cache location). Anchored so a source folder named cache isn't hidden.
+/cache/
+
 # Builds go in GitHub releases, not in git.
 /PhoneExplorer.exe
