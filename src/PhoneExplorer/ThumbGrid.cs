@@ -4,7 +4,8 @@ using PhoneExplorer.Hud;
 
 namespace PhoneExplorer;
 
-public sealed record EntryGroup(string Title, int Start, int Count);
+/// <summary>A titled run of entries; Bytes, when set, is shown in the header next to the count.</summary>
+public sealed record EntryGroup(string Title, int Start, int Count, long? Bytes = null);
 
 /// <summary>
 /// A scrolling grid of thumbnails split into titled groups (months). Thumbnails come from
@@ -31,6 +32,8 @@ public sealed class ThumbGrid : ScrollableControl
 
     public Func<int, Bitmap?>? ThumbnailSource;
     public Func<MediaEntry, bool>? IsNew;
+    /// <summary>The text under a tile; null shows the file name.</summary>
+    public Func<MediaEntry, string>? Caption;
     public event Action<List<int>>? ThumbnailsNeeded;
     public event EventHandler? SelectionChanged;
     public event Action<MediaEntry>? EntryActivated;
@@ -246,11 +249,12 @@ public sealed class ThumbGrid : ScrollableControl
         for (int i = group.Start; i < group.Start + group.Count; i++)
             if (selected.Contains(entries[i].Key)) selectedInGroup++;
         x = Readout(g, x, baseline, group.Count.ToString("N0"), group.Count == 1 ? "item" : "items");
+        if (group.Bytes is long bytes) x = Readout(g, x + S(Theme.Space2), baseline, FormatSize(bytes), "");
         if (selectedInGroup > 0) x = Readout(g, x + S(Theme.Space2), baseline, selectedInGroup.ToString("N0"), "selected");
 
         if (row.Group == hoverHeader)
         {
-            var hint = Theme.Case(selectedInGroup == group.Count ? "Click to clear month" : "Click to select month");
+            var hint = Theme.Case(selectedInGroup == group.Count ? "Click to clear group" : "Click to select group");
             var lf = Theme.Label();
             var hs = Theme.MeasureTracked(g, hint, lf, Theme.TrackingLabel);
             Theme.DrawTracked(g, hint, lf, Theme.ColorAccentText, new Point(r.Right - hs.Width, baseline - hs.Height - S(2)), Theme.TrackingLabel);
@@ -361,7 +365,7 @@ public sealed class ThumbGrid : ScrollableControl
         }
 
         var label = new Rectangle(r.X + Pad, box.Bottom + S(Theme.Space1), box.Width, LabelH - S(Theme.Space1));
-        TextRenderer.DrawText(g, entry.Primary.Name, Font, label, isSelected ? Theme.ColorTextStrong : Theme.ColorTextMuted,
+        TextRenderer.DrawText(g, Caption?.Invoke(entry) ?? entry.Primary.Name, Font, label, isSelected ? Theme.ColorTextStrong : Theme.ColorTextMuted,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
 
         if (i == focus && Focused && keyboardFocus) Theme.DrawFocusRing(g, r, S(2), Theme.Corner.Md);

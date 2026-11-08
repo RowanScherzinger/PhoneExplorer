@@ -33,6 +33,17 @@ public sealed class MainForm : Form
         HudRenderer.Style(new ToolStripButton("L") { ToolTipText = "Large thumbnails" }, ItemRole.Segment),
     };
     static readonly int[] SizeSteps = { 100, 150, 230 };
+    readonly ToolStripButton sortDateButton = HudRenderer.Style(new ToolStripButton("Date") { ToolTipText = "Newest first, by month" }, ItemRole.Segment);
+    readonly ToolStripButton sortSizeButton = HudRenderer.Style(new ToolStripButton("Largest") { ToolTipText = "Largest first, to find what takes up space on the phone" }, ItemRole.Segment);
+    /// <summary>Size bands for the Largest sort, biggest first; an item goes in the first band it reaches.</summary>
+    static readonly (long Min, string Title)[] SizeBands =
+    {
+        (1L << 30, "1 GB and over"),
+        (100L << 20, "100 MB – 1 GB"),
+        (10L << 20, "10 – 100 MB"),
+        (1L << 20, "1 – 10 MB"),
+        (0, "Under 1 MB"),
+    };
     readonly ToolStripButton copySelectedButton = HudRenderer.Style(new ToolStripButton("Copy selected") { ToolTipText = "Copy the selected items to this PC" }, ItemRole.Primary);
     readonly ToolStripButton moveButton = HudRenderer.Style(new ToolStripButton("Move to PC") { ToolTipText = "Cut: copy the selected items to this PC, then remove them from the phone (Ctrl+X)" }, ItemRole.Secondary);
     readonly ToolStripButton deleteButton =HudRenderer.Style(new ToolStripButton("Delete") { ToolTipText = "Delete the selected items from the phone (Del). Asks first." }, ItemRole.Danger);
@@ -173,6 +184,19 @@ public sealed class MainForm : Form
             };
         }
 
+        foreach (var (button, order) in new[] { (sortDateButton, SortOrder.Date), (sortSizeButton, SortOrder.Size) })
+        {
+            button.Checked = settings.Sort == order;
+            button.Click += (_, _) =>
+            {
+                if (settings.Sort == order) return;
+                settings.Sort = order;
+                sortDateButton.Checked = order == SortOrder.Date;
+                sortSizeButton.Checked = order == SortOrder.Size;
+                ApplyView(keepScroll: false);
+            };
+        }
+
         searchBox.Box.PlaceholderText = "file name";
         searchBox.Box.TextChanged += (_, _) => ApplyView(keepScroll: false);
         searchHost = new ToolStripControlHost(searchBox) { AutoSize = false, Width = searchBox.Width, Margin = new Padding(0, 3, Theme.Space2, 3) };
@@ -188,6 +212,7 @@ public sealed class MainForm : Form
             refreshButton, new ToolStripSeparator(),
             HudRenderer.Style(new ToolStripLabel("Show"), ItemRole.Label), photosButton, videosButton, imagesButton, otherButton, new ToolStripSeparator(),
             HudRenderer.Style(new ToolStripLabel("Find"), ItemRole.Label), searchHost, new ToolStripSeparator(),
+            HudRenderer.Style(new ToolStripLabel("Sort"), ItemRole.Label), sortDateButton, sortSizeButton, new ToolStripSeparator(),
             HudRenderer.Style(new ToolStripLabel("Size"), ItemRole.Label), sizeButtons[0], sizeButtons[1], sizeButtons[2],
             copySelectedButton, moveButton, deleteButton,
         });
@@ -528,21 +553,11 @@ public sealed class MainForm : Form
     {
         var period = SelectedPeriod;
         var search = searchBox.Text.Trim();
-        var list = library
+        var filtered = library
             .Where(e => KindShown(e.Kind) && InPeriod(e, period) &&
-                        (search.Length == 0 || e.AllFiles.Any(f => f.Name.Contains(search, StringComparison.OrdinalIgnoreCase))))
-            .OrderByDescending(e => e.Date)
-            .ThenByDescending(e => e.Primary.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var groups = new List<EntryGroup>();
-        for (int i = 0; i < list.Count;)
-        {
-            var d = list[i].Date;
-            int start = i;
-            while (i < list.Count && list[i].Date.Year == d.Year && list[i].Date.Month == d.Month) i++;
-            groups.Add(new EntryGroup(d == DateTime.MinValue ? "Unknown date" : Library.MonthTitle(d.Year, d.Month), start, i - start));
-        }
+                        (search.Length == 0 || e.AllFiles.Any(f => f.Name.Contains(search, StringComparison.OrdinalIgnoreCase))));
+        var (list, groups) = Arrange(filtered);
+        grid.Caption = settings.Sort == SortOrder.Size ? e => ThumbGrid.FormatSize(e.TotalSize) : null;
         if (device != null && !scanning && library.Count > 0)
             grid.EmptyText = period == Period.New
                 ? device.IsApple
@@ -552,6 +567,41 @@ public sealed class MainForm : Form
                 : "Nothing matches\nNo items match the current filters. Turn on more types under Show, or clear Find.";
         grid.SetEntries(list, groups, keepScroll);
         UpdateSelectionInfo();
+    }
+
+    /// <summary>Orders the shown items and splits them into titled groups for the current sort.</summary>
+    (List<MediaEntry> List, List<EntryGroup> Groups) Arrange(IEnumerable<MediaEntry> items)
+    {
+        var groups = new List<EntryGroup>();
+        if (settings.Sort == SortOrder.Size)
+        {
+            var bySize = items.Select(e => (Entry: e, Bytes: e.TotalSize))
+                .OrderByDescending(x => x.Bytes)
+                .ThenByDescending(x => x.Entry.Date)
+                .ToList();
+            for (int i = 0, band = 0; i < bySize.Count; band++)
+            {
+                int start = i;
+                long total = 0;
+                while (i < bySize.Count && (band == SizeBands.Length - 1 || bySize[i].Bytes >= SizeBands[band].Min))
+                    total += bySize[i++].Bytes;
+                if (i > start) groups.Add(new EntryGroup(SizeBands[band].Title, start, i - start, total));
+            }
+            return (bySize.Select(x => x.Entry).ToList(), groups);
+        }
+
+        var byDate = items
+            .OrderByDescending(e => e.Date)
+            .ThenByDescending(e => e.Primary.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        for (int i = 0; i < byDate.Count;)
+        {
+            var d = byDate[i].Date;
+            int start = i;
+            while (i < byDate.Count && byDate[i].Date.Year == d.Year && byDate[i].Date.Month == d.Month) i++;
+            groups.Add(new EntryGroup(d == DateTime.MinValue ? "Unknown date" : Library.MonthTitle(d.Year, d.Month), start, i - start));
+        }
+        return (byDate, groups);
     }
 
     void UpdateSelectionInfo()
@@ -746,7 +796,7 @@ public sealed class MainForm : Form
     void MoveEntries(List<MediaEntry> entries)
     {
         if (entries.Count == 0 || busy || scanning) return;
-        using (var dialog = new CopyDialog(settings, entries.Count, entries.Sum(e => e.AllFiles.Sum(f => Math.Max(0, f.Size))), device?.Name ?? "the phone", device?.IsApple ?? true, move: true))
+        using (var dialog = new CopyDialog(settings, entries.Count, entries.Sum(e => e.TotalSize), device?.Name ?? "the phone", device?.IsApple ?? true, move: true))
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
         // A move takes every file of each item, so nothing is left orphaned on the phone.
@@ -808,7 +858,7 @@ public sealed class MainForm : Form
     {
         if (entries.Count == 0 || busy || scanning) return;
         int fileCount = entries.Sum(e => e.AllFiles.Count());
-        long bytes = entries.Sum(e => e.AllFiles.Sum(f => Math.Max(0, f.Size)));
+        long bytes = entries.Sum(e => e.TotalSize);
         int copied = AlreadyCopied(entries);
         var what = entries.Count == 1 ? entries[0].Primary.Name : $"{entries.Count:N0} items";
         var backup = copied == entries.Count

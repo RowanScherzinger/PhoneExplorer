@@ -7,6 +7,9 @@ public enum MediaKind { Photo, Video, Image, Other }
 
 public enum FileRole { Primary, Edited, Live, EditedLive, Sidecar }
 
+/// <summary>How the grid orders and groups items: newest first by month, or largest first by size band.</summary>
+public enum SortOrder { Date, Size }
+
 /// <summary>One file on the phone. Id refers to the shell item held by the PhoneWorker.</summary>
 public sealed record MediaFile(int Id, string Name, string Folder, long Size, DateTime Date, TimeSpan? Duration)
 {
@@ -33,6 +36,9 @@ public sealed class MediaEntry
     public MediaFile Display => Extras.FirstOrDefault(x => x.Role == FileRole.Edited).File ?? Primary;
 
     public IEnumerable<MediaFile> AllFiles => Extras.Select(x => x.File).Prepend(Primary);
+
+    /// <summary>Bytes of every file in the item: the space deleting it frees on the phone.</summary>
+    public long TotalSize => AllFiles.Sum(f => Math.Max(0, f.Size));
 }
 
 public static class Library

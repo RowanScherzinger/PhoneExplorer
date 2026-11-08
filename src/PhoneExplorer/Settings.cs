@@ -15,6 +15,7 @@ public sealed class Settings
     public bool ShowVideos { get; set; } = true;
     public bool ShowImages { get; set; } = true;
     public bool ShowOther { get; set; } = false;
+    public SortOrder Sort { get; set; } = SortOrder.Date;
     /// <summary>A ThemeDef.Id; unknown ids fall back to the first theme.</summary>
     public string ThemeName { get; set; } = "JarvisApps";
 
